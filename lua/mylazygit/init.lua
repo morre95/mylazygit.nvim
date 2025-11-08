@@ -15,6 +15,12 @@ local state = {
   status = {},
 }
 
+local function ensure_highlight(name, opts)
+  if vim.fn.hlexists(name) == 0 then
+    vim.api.nvim_set_hl(0, name, opts)
+  end
+end
+
 local function notify(msg, level)
   vim.notify(msg, level or vim.log.levels.INFO, { title = 'MyLazyGit' })
 end
@@ -101,6 +107,7 @@ function M.refresh()
   end
 
   local lines = { 'MyLazyGit', '------------', '' }
+  local highlights = {}
 
   if not git.is_repo() then
     table.insert(lines, 'No git repository detected in current working directory.')
@@ -135,13 +142,28 @@ function M.refresh()
   table.insert(lines, 'Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit')
 
   table.insert(lines, '')
+  local branch_for_log = git.current_branch() or config.branch_fallback
   table.insert(lines, string.format('Recent commits (last %d):', config.log_limit))
   local log_lines = git.log(config.log_limit)
+  local unpushed_set = {}
+  if branch_for_log then
+    for _, hash in ipairs(git.unpushed(config.remote, branch_for_log)) do
+      unpushed_set[hash] = true
+    end
+  end
+
   if vim.tbl_isempty(log_lines) then
     table.insert(lines, '  No commits found')
   else
-    for _, log_line in ipairs(log_lines) do
-      table.insert(lines, '  ' .. log_line)
+    for _, entry in ipairs(log_lines) do
+      table.insert(lines, string.format('  %s %s', entry.hash, entry.message))
+      local group = unpushed_set[entry.hash] and 'MyLazyGitUnpushed' or 'MyLazyGitPushed'
+      table.insert(highlights, {
+        line = #lines - 1,
+        group = group,
+        col_start = 0,
+        col_end = -1,
+      })
     end
   end
 
@@ -163,7 +185,7 @@ function M.refresh()
     end
   end
 
-  ui.render(lines)
+  ui.render(lines, highlights)
 end
 
 local function run_and_refresh(fn, success_msg)
@@ -310,6 +332,9 @@ end
 
 function M.setup(opts)
   config = vim.tbl_deep_extend('force', config, opts or {})
+
+  ensure_highlight('MyLazyGitPushed', { link = 'DiffAdded' })
+  ensure_highlight('MyLazyGitUnpushed', { link = 'DiffRemoved' })
 
   if vim.fn.has('nvim-0.8') == 0 then
     notify('MyLazyGit requires Neovim 0.8 or newer', vim.log.levels.ERROR)

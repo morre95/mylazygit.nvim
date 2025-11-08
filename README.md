@@ -5,7 +5,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 ## Features
 
 - Floating status window with the familiar `git status --short` view
-- Always-on log/diff panel showing `git log --oneline` and a trimmed `git diff`
+- Always-on log/diff panel showing `git log --oneline` and a trimmed `git diff`, with color cues for pushed (green) vs local-only (red) commits
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
 - Run `git init`, `git pull`, `git push`, and `git fetch` against a configurable remote
@@ -69,4 +69,5 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 
 - All git operations happen in the current working directory of Neovim. Change directories (`:cd`, `:lcd`, or via your file tree) before launching if needed.
 - Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the `branch_fallback` option is used instead.
+- Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).

@@ -67,16 +67,62 @@ function M.push(remote, branch)
   return system({ 'push', remote, branch })
 end
 
+local function upstream_ref(remote, branch)
+  local ok, output = system({ 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}' }, { silent = true })
+  if ok and output[1] and output[1] ~= '' then
+    return trim(output[1])
+  end
+  if remote and branch then
+    return string.format('%s/%s', remote, branch)
+  end
+end
+
 function M.fetch(remote)
   return system({ 'fetch', remote or 'origin' })
 end
 
 function M.log(limit)
   limit = limit or 5
-  local ok, output = system({ 'log', '--oneline', string.format('-n%d', limit) }, { silent = true })
+  local ok, output = system({
+    'log',
+    string.format('-n%d', limit),
+    '--pretty=format:%h%x01%s',
+  }, { silent = true })
   if not ok then
     return {}
   end
+
+  local entries = {}
+  for _, line in ipairs(output) do
+    local sep = line:find('\1', 1, true)
+    if sep then
+      table.insert(entries, {
+        hash = line:sub(1, sep - 1),
+        message = line:sub(sep + 1),
+      })
+    else
+      table.insert(entries, { hash = line, message = '' })
+    end
+  end
+  return entries
+end
+
+function M.unpushed(remote, branch)
+  local upstream = upstream_ref(remote, branch)
+  if not upstream then
+    return {}
+  end
+
+  local ok, output = system({
+    'log',
+    '--pretty=format:%h',
+    string.format('%s..HEAD', upstream),
+  }, { silent = true })
+
+  if not ok then
+    return {}
+  end
+
   return output
 end
 

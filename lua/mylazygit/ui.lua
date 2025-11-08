@@ -5,6 +5,8 @@ local state = {
   win = nil,
 }
 
+local namespace = vim.api.nvim_create_namespace('mylazygit')
+
 local function create_window()
   local columns = vim.o.columns
   local lines = vim.o.lines
@@ -58,7 +60,7 @@ function M.is_open()
   return state.win and vim.api.nvim_win_is_valid(state.win)
 end
 
-function M.render(lines)
+function M.render(lines, highlights)
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
@@ -66,6 +68,20 @@ function M.render(lines)
   vim.api.nvim_set_option_value('modifiable', true, { buf = state.buf })
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
   vim.api.nvim_set_option_value('modifiable', false, { buf = state.buf })
+
+  vim.api.nvim_buf_clear_namespace(state.buf, namespace, 0, -1)
+  if highlights then
+    for _, hl in ipairs(highlights) do
+      vim.api.nvim_buf_add_highlight(
+        state.buf,
+        namespace,
+        hl.group,
+        hl.line or 0,
+        hl.col_start or 0,
+        hl.col_end or -1
+      )
+    end
+  end
 end
 
 function M.set_keymaps(mappings)
