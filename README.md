@@ -17,7 +17,7 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
 
 ```lua
 {
-  'cryptofarian/mylazygit',
+  'morre95/mylazygit',
   config = function()
     require('mylazygit').setup({
       remote = 'origin',        -- change if you use something else
@@ -26,6 +26,18 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
       diff_args = { '--stat' }, -- passed to `git diff`
       diff_max_lines = 80,      -- trim diff panel for readability
     })
+  end,
+}
+```
+
+> **Heads up**: if you're hacking on this locally (e.g. the repo lives under `~/lua/MyLazyGit`) and it's not pushed to GitHub, tell lazy.nvim to load from the local path:
+
+```lua
+{
+  dir = '~/lua/MyLazyGit',  -- absolute path to your clone
+  name = 'mylazygit',
+  config = function()
+    require('mylazygit').setup()
   end,
 }
 ```
