@@ -132,7 +132,7 @@ function M.refresh()
   table.insert(lines, '')
   table.insert(lines, string.format('Staged: %d | Unstaged: %d | Untracked: %d', staged, unstaged, untracked))
   table.insert(lines, '')
-  table.insert(lines, 'Keymap: [r]efresh [s]tage (multi) [u]nstage [c]ommit [p]ush [P]ull [f]etch [i]nit [q]uit')
+  table.insert(lines, 'Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit')
 
   table.insert(lines, '')
   table.insert(lines, string.format('Recent commits (last %d):', config.log_limit))
@@ -218,6 +218,15 @@ local function stage_file()
   end)
 end
 
+local function stage_all()
+  if not repo_required() then
+    return
+  end
+  run_and_refresh(function()
+    return select(1, git.stage({ '.' }))
+  end, 'Staged all changes (git add .)')
+end
+
 local function unstage_file()
   if not repo_required() then
     return
@@ -283,11 +292,12 @@ local function set_keymaps()
     { lhs = 'q', rhs = ui.close, desc = 'Quit MyLazyGit' },
     { lhs = 'r', rhs = M.refresh, desc = 'Refresh status' },
     { lhs = 's', rhs = stage_file, desc = 'Stage file' },
+    { lhs = 'a', rhs = stage_all, desc = 'Stage all (git add .)' },
     { lhs = 'u', rhs = unstage_file, desc = 'Unstage file' },
     { lhs = 'c', rhs = commit_changes, desc = 'Commit' },
     { lhs = 'i', rhs = git_init, desc = 'Git init' },
-    { lhs = 'P', rhs = git_pull, desc = 'Git pull' },
-    { lhs = 'p', rhs = git_push, desc = 'Git push' },
+    { lhs = 'p', rhs = git_pull, desc = 'Git pull' },
+    { lhs = 'P', rhs = git_push, desc = 'Git push' },
     { lhs = 'f', rhs = git_fetch, desc = 'Git fetch' },
   })
 end

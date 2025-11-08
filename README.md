@@ -17,7 +17,7 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
 
 ```lua
 {
-  'morre95/mylazygit',
+  'morre95/mylazygit.nvim',
   config = function()
     require('mylazygit').setup({
       remote = 'origin',        -- change if you use something else
@@ -54,10 +54,11 @@ Key | Action
 --- | ---
 `r` | Refresh the status view
 `s` | Stage files (multi-select; keep choosing until you press Esc)
+`a` | Stage everything (`git add .`)
 `u` | Unstage a file
 `c` | Commit staged changes (prompts for message)
-`p` | Push to the configured remote/branch
-`P` | Pull from the configured remote/branch
+`p` | Pull from the configured remote/branch
+`P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
 `i` | Run `git init`
 `q` | Close the window
