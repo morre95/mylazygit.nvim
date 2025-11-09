@@ -48,6 +48,44 @@ local function limit_lines(lines, max_lines)
 	return trimmed
 end
 
+local function format_preview_title(file)
+	if not file or file == "" then
+		return " Preview "
+	end
+	local shortened = vim.fn.fnamemodify(file, ":.")
+	return string.format(" Preview: %s ", shortened)
+end
+
+local function show_preview_for_file(file)
+	if not file or file == "" then
+		ui.reset_preview()
+		return
+	end
+
+	if not git.is_repo() then
+		ui.reset_preview()
+		return
+	end
+
+	local diff_lines = git.diff({ "--", file })
+	if vim.tbl_isempty(diff_lines) then
+		diff_lines = git.diff({ "--cached", "--", file })
+	end
+
+	if vim.tbl_isempty(diff_lines) then
+		diff_lines = { string.format("No staged or unstaged changes for %s", file) }
+	end
+
+	ui.show_preview(diff_lines, {
+		title = format_preview_title(file),
+		filetype = "diff",
+	})
+end
+
+ui.set_handlers({
+	on_worktree_select = show_preview_for_file,
+})
+
 local function collect_files(predicate)
 	local files = {}
 	for _, item in ipairs(state.status) do
@@ -116,13 +154,50 @@ function M.refresh()
 		return
 	end
 
-	local lines = { "MyLazyGit", "------------", "" }
-	local highlights = {}
+	state.status = {}
+
+	local layout = {
+		info = {
+			branch = "Branch: -",
+			details = {},
+		},
+		worktree = {
+			title = " Worktree (0) ",
+			lines = {},
+			items = {},
+			highlights = {},
+		},
+		commits = {
+			title = string.format(" Commits (last %d) ", config.log_limit),
+			lines = {},
+			highlights = {},
+		},
+		diff = {
+			title = " Diff preview ",
+			lines = {},
+		},
+		preview = {
+			title = " Preview ",
+			lines = { "Select a file from Worktree to see the live diff preview." },
+		},
+		keymap = {
+			lines = {
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit",
+				"<Tab>/<S-Tab> cycle panes · Use cursor keys to move within a pane.",
+			},
+		},
+	}
 
 	if not git.is_repo() then
-		table.insert(lines, "No git repository detected in current working directory.")
-		table.insert(lines, "Press `i` to run `git init` or switch to a repo before opening MyLazyGit.")
-		ui.render(lines)
+		layout.info.branch = "No git repository detected"
+		layout.info.details = {
+			"Press `i` to run git init or switch to a repository before opening MyLazyGit.",
+		}
+		layout.worktree.lines = { "Open a git repository to view worktree changes." }
+		layout.commits.lines = { "Commits unavailable outside a repository." }
+		layout.diff.lines = { "Diff preview unavailable outside a repository." }
+		layout.preview.lines = { "Git data unavailable until a repository is detected." }
+		ui.render(layout)
 		return
 	end
 
@@ -130,14 +205,15 @@ function M.refresh()
 
 	local branch = git.current_branch()
 	if branch then
-		table.insert(lines, string.format("Branch: %s", branch))
+		layout.info.branch = string.format("Branch: %s", branch)
 	else
-		table.insert(lines, string.format("Branch: detached HEAD (fallback: %s)", config.branch_fallback))
+		layout.info.branch = string.format("Branch: detached HEAD (fallback: %s)", config.branch_fallback)
 	end
-	table.insert(lines, "")
 
 	local staged, unstaged, untracked = 0, 0, 0
-	for _, item in ipairs(state.status) do
+	local worktree_lines, worktree_items, worktree_highlights = {}, {}, {}
+
+	for idx, item in ipairs(state.status) do
 		if item.staged and item.staged:match("%S") then
 			staged = staged + 1
 		end
@@ -147,19 +223,26 @@ function M.refresh()
 		if item.staged == "?" and item.unstaged == "?" then
 			untracked = untracked + 1
 		end
-		table.insert(lines, string.format("%s%s %s", item.staged, item.unstaged, item.file))
-		local line_idx = #lines - 1
+
+		local line = string.format("%s%s %s", item.staged, item.unstaged, item.file)
+		table.insert(worktree_lines, line)
+		table.insert(worktree_items, {
+			file = item.file,
+			staged = item.staged,
+			unstaged = item.unstaged,
+		})
+
 		if has_staged_change(item.staged) then
-			table.insert(highlights, {
-				line = line_idx,
+			table.insert(worktree_highlights, {
+				line = idx - 1,
 				group = "MyLazyGitStagedIndicator",
 				col_start = 0,
 				col_end = 1,
 			})
 		end
 		if has_unstaged_change(item.unstaged) then
-			table.insert(highlights, {
-				line = line_idx,
+			table.insert(worktree_highlights, {
+				line = idx - 1,
 				group = "MyLazyGitUnstagedIndicator",
 				col_start = 1,
 				col_end = 2,
@@ -167,16 +250,17 @@ function M.refresh()
 		end
 	end
 
-	if #state.status == 0 then
-		table.insert(lines, "Working tree clean")
-	end
+	layout.worktree.title = string.format(" Worktree (%d) ", #state.status)
+	layout.worktree.lines = worktree_lines
+	layout.worktree.items = worktree_items
+	layout.worktree.highlights = worktree_highlights
 
-	table.insert(lines, "")
-	table.insert(lines, string.format("Staged: %d | Unstaged: %d | Untracked: %d", staged, unstaged, untracked))
-	table.insert(lines, "")
+	layout.info.details = {
+		string.format("Files %d · Staged %d · Unstaged %d · Untracked %d", #state.status, staged, unstaged, untracked),
+		string.format("Remote %s · Log limit %d", config.remote, config.log_limit),
+	}
 
-	local branch_for_log = git.current_branch() or config.branch_fallback
-	table.insert(lines, string.format("Recent commits (last %d):", config.log_limit))
+	local branch_for_log = branch or config.branch_fallback
 	local log_lines = git.log(config.log_limit)
 	local unpushed_set = {}
 	if branch_for_log then
@@ -185,46 +269,28 @@ function M.refresh()
 		end
 	end
 
-	if vim.tbl_isempty(log_lines) then
-		table.insert(lines, "  No commits found")
-	else
-		for _, entry in ipairs(log_lines) do
-			table.insert(lines, string.format("  %s %s", entry.hash, entry.message))
-			local group = unpushed_set[entry.hash] and "MyLazyGitUnpushed" or "MyLazyGitPushed"
-			table.insert(highlights, {
-				line = #lines - 1,
-				group = group,
-				col_start = 0,
-				col_end = -1,
-			})
-		end
+	local commit_lines, commit_highlights = {}, {}
+	for idx, entry in ipairs(log_lines) do
+		local line = string.format("%s %s", entry.hash, entry.message)
+		table.insert(commit_lines, line)
+		local group = unpushed_set[entry.hash] and "MyLazyGitUnpushed" or "MyLazyGitPushed"
+		table.insert(commit_highlights, {
+			line = idx - 1,
+			group = group,
+			col_start = 0,
+			col_end = -1,
+		})
 	end
 
-	table.insert(lines, "")
+	layout.commits.lines = commit_lines
+	layout.commits.highlights = commit_highlights
+
 	local diff_args = config.diff_args or {}
-	local diff_label
-	if #diff_args > 0 then
-		diff_label = "Diff preview (git diff " .. table.concat(diff_args, " ") .. "):"
-	else
-		diff_label = "Diff preview (git diff):"
-	end
-	table.insert(lines, diff_label)
-	local diff_lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
-	if vim.tbl_isempty(diff_lines) then
-		table.insert(lines, "  Working tree clean (diff)")
-	else
-		for _, diff_line in ipairs(diff_lines) do
-			table.insert(lines, "  " .. diff_line)
-		end
-	end
+	local diff_label = (#diff_args > 0) and ("git diff " .. table.concat(diff_args, " ")) or "git diff"
+	layout.diff.title = string.format(" Diff preview (%s) ", diff_label)
+	layout.diff.lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
 
-	table.insert(lines, "")
-	table.insert(
-		lines,
-		"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
-	)
-
-	ui.render(lines, highlights)
+	ui.render(layout)
 end
 
 local function run_and_refresh(fn, success_msg)
