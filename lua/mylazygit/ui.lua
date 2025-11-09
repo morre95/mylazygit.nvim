@@ -148,7 +148,10 @@ local function track_focus(name, win)
 	vim.api.nvim_create_autocmd("WinEnter", {
 		group = group,
 		callback = function(args)
-			local triggered_win = (args and args.win) or vim.api.nvim_get_current_win()
+			local triggered_win = vim.api.nvim_get_current_win()
+			if args and type(args) == "table" and args.win then
+				triggered_win = args.win
+			end
 			if triggered_win ~= win then
 				return
 			end
