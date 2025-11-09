@@ -116,21 +116,18 @@ function M.refresh()
 		return
 	end
 
-  state.status = git.parse_status()
+	state.status = git.parse_status()
 
-  local branch = git.current_branch()
-  if branch then
-    table.insert(lines, string.format('Branch: %s', branch))
-  else
-    table.insert(
-      lines,
-      string.format('Branch: detached HEAD (fallback: %s)', config.branch_fallback)
-    )
-  end
-  table.insert(lines, '')
+	local branch = git.current_branch()
+	if branch then
+		table.insert(lines, string.format("Branch: %s", branch))
+	else
+		table.insert(lines, string.format("Branch: detached HEAD (fallback: %s)", config.branch_fallback))
+	end
+	table.insert(lines, "")
 
-  local staged, unstaged, untracked = 0, 0, 0
-  for _, item in ipairs(state.status) do
+	local staged, unstaged, untracked = 0, 0, 0
+	for _, item in ipairs(state.status) do
 		if item.staged and item.staged:match("%S") then
 			staged = staged + 1
 		end
@@ -150,13 +147,7 @@ function M.refresh()
 	table.insert(lines, "")
 	table.insert(lines, string.format("Staged: %d | Unstaged: %d | Untracked: %d", staged, unstaged, untracked))
 	table.insert(lines, "")
-	table.insert(
-		lines,
-		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
-	)
-	table.insert(lines, "[R]emote add [U](remote set-url) [n]ew bransh [b]switch bransh")
 
-	table.insert(lines, "")
 	local branch_for_log = git.current_branch() or config.branch_fallback
 	table.insert(lines, string.format("Recent commits (last %d):", config.log_limit))
 	local log_lines = git.log(config.log_limit)
@@ -199,6 +190,13 @@ function M.refresh()
 			table.insert(lines, "  " .. diff_line)
 		end
 	end
+
+	table.insert(lines, "")
+	table.insert(
+		lines,
+		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
+	)
+	table.insert(lines, "[R]emote add [U](remote set-url) [n]ew bransh [b]switch bransh")
 
 	ui.render(lines, highlights)
 end
