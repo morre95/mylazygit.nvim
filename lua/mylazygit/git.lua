@@ -80,6 +80,7 @@ function M.branches()
 	if not ok then
 		return {}
 	end
+
 	local branches = {}
 	for _, line in ipairs(output) do
 		local name = trim(line)
@@ -87,6 +88,7 @@ function M.branches()
 			table.insert(branches, name)
 		end
 	end
+
 	table.sort(branches)
 	return branches
 end
@@ -103,6 +105,7 @@ function M.delete_branch(name, force)
 	if not name or name == "" then
 		return false, { "Branch name required" }
 	end
+
 	local flag = force and "-D" or "-d"
 	return system({ "branch", flag, name })
 end

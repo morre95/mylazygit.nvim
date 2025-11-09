@@ -371,15 +371,18 @@ local function switch_branch()
 	if not repo_required() then
 		return
 	end
+
 	local branches = git.branches()
 	if vim.tbl_isempty(branches) then
 		notify("No branches found", vim.log.levels.WARN)
 		return
 	end
+
 	vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
 		if not choice then
 			return
 		end
+
 		run_and_refresh(function()
 			return select(1, git.switch(choice))
 		end, string.format("Switched to %s", choice))
@@ -497,11 +500,8 @@ local function delete_branch(force)
 		if not choice then
 			return
 		end
-		local confirmation = vim.fn.confirm(
-			string.format("%s branch %s?", force and "Force delete" or "Delete", choice),
-			"&Yes\n&No",
-			2
-		)
+		local confirmation =
+			vim.fn.confirm(string.format("%s branch %s?", force and "Force delete" or "Delete", choice), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Branch deletion cancelled", vim.log.levels.INFO)
 			return
