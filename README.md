@@ -16,7 +16,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
-{
+return {
   'morre95/mylazygit.nvim',
   config = function()
     require('mylazygit').setup({
@@ -33,7 +33,7 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
 > **Heads up**: if you're hacking on this locally (e.g. the repo lives under `~/lua/MyLazyGit`) and it's not pushed to GitHub, tell lazy.nvim to load from the local path:
 
 ```lua
-{
+return {
   dir = '~/lua/MyLazyGit',  -- absolute path to your clone
   name = 'mylazygit',
   config = function()
