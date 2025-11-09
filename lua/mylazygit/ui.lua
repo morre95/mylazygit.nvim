@@ -49,11 +49,17 @@ local function add_highlight(buf, hl)
 	if vim.hl and vim.hl.range then
 		vim.hl.range(buf, namespace, hl.group, { line, col_start }, { line, col_end }, opts)
 	else
-		vim.api.nvim_buf_set_extmark(buf, namespace, line, col_start, vim.tbl_extend("force", opts, {
-			hl_group = hl.group,
-			end_row = line,
-			end_col = col_end,
-		}))
+		vim.api.nvim_buf_set_extmark(
+			buf,
+			namespace,
+			line,
+			col_start,
+			vim.tbl_extend("force", opts, {
+				hl_group = hl.group,
+				end_row = line,
+				end_col = col_end,
+			})
+		)
 	end
 end
 
@@ -149,8 +155,10 @@ local function track_focus(name, win)
 		group = group,
 		callback = function(args)
 			local triggered_win = vim.api.nvim_get_current_win()
-			if args and type(args) == "table" and args.win then
-				triggered_win = args.win
+			local buf = args.buf
+			local winid = vim.fn.bufwinid(buf)
+			if args and winid then
+				triggered_win = winid
 			end
 			if triggered_win ~= win then
 				return
