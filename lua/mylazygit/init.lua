@@ -116,10 +116,21 @@ function M.refresh()
 		return
 	end
 
-	state.status = git.parse_status()
+  state.status = git.parse_status()
 
-	local staged, unstaged, untracked = 0, 0, 0
-	for _, item in ipairs(state.status) do
+  local branch = git.current_branch()
+  if branch then
+    table.insert(lines, string.format('Branch: %s', branch))
+  else
+    table.insert(
+      lines,
+      string.format('Branch: detached HEAD (fallback: %s)', config.branch_fallback)
+    )
+  end
+  table.insert(lines, '')
+
+  local staged, unstaged, untracked = 0, 0, 0
+  for _, item in ipairs(state.status) do
 		if item.staged and item.staged:match("%S") then
 			staged = staged + 1
 		end
