@@ -25,6 +25,38 @@ local function pad_lines(lines, total)
 	return padded
 end
 
+local function add_highlight(buf, hl)
+	if not buf or not vim.api.nvim_buf_is_valid(buf) or not hl or not hl.group then
+		return
+	end
+
+	local line = math.max(hl.line or 0, 0)
+	local col_start = math.max(hl.col_start or 0, 0)
+	local line_text = vim.api.nvim_buf_get_lines(buf, line, line + 1, false)[1] or ""
+	local line_len = #line_text
+	col_start = math.min(col_start, line_len)
+
+	local col_end = hl.col_end
+	if not col_end or col_end < 0 then
+		col_end = line_len
+	end
+	col_end = math.max(col_start, math.min(col_end, line_len))
+
+	local opts = {
+		priority = hl.priority,
+	}
+
+	if vim.hl and vim.hl.range then
+		vim.hl.range(buf, namespace, hl.group, { line, col_start }, { line, col_end }, opts)
+	else
+		vim.api.nvim_buf_set_extmark(buf, namespace, line, col_start, vim.tbl_extend("force", opts, {
+			hl_group = hl.group,
+			end_row = line,
+			end_col = col_end,
+		}))
+	end
+end
+
 local function set_buffer_lines(buf, lines, opts)
 	if not buf or not vim.api.nvim_buf_is_valid(buf) then
 		return
@@ -254,9 +286,7 @@ end
 local function apply_highlights(buf, highlights)
 	vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
 	for _, hl in ipairs(highlights or {}) do
-		if hl.group then
-			vim.api.nvim_buf_add_highlight(buf, namespace, hl.group, hl.line or 0, hl.col_start or 0, hl.col_end or -1)
-		end
+		add_highlight(buf, hl)
 	end
 end
 
