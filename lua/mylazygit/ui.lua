@@ -7,6 +7,28 @@ local state = {
 
 local namespace = vim.api.nvim_create_namespace('mylazygit')
 
+local function add_highlight(hl)
+  if not hl.group then
+    return
+  end
+
+  local line = hl.line or 0
+  local col_start = hl.col_start or 0
+  local opts = {
+    hl_group = hl.group,
+    priority = hl.priority,
+  }
+
+  if hl.col_end and hl.col_end >= 0 then
+    opts.end_row = line
+    opts.end_col = hl.col_end
+  else
+    opts.hl_eol = true
+  end
+
+  vim.api.nvim_buf_set_extmark(state.buf, namespace, line, col_start, opts)
+end
+
 local function create_window()
   local columns = vim.o.columns
   local lines = vim.o.lines
@@ -72,14 +94,7 @@ function M.render(lines, highlights)
   vim.api.nvim_buf_clear_namespace(state.buf, namespace, 0, -1)
   if highlights then
     for _, hl in ipairs(highlights) do
-      vim.api.nvim_buf_add_highlight(
-        state.buf,
-        namespace,
-        hl.group,
-        hl.line or 0,
-        hl.col_start or 0,
-        hl.col_end or -1
-      )
+      add_highlight(hl)
     end
   end
 end
