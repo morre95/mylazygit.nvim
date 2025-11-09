@@ -60,6 +60,8 @@ Key | Action
 `p` | Pull from the configured remote/branch
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
+`n` | Create and switch to a new branch (`git switch -c`)
+`b` | Switch to an existing branch (picker)
 `R` | Run `git remote add` (prompts for name + URL)
 `U` | Run `git remote set-url` (prompts for name + URL)
 `i` | Run `git init`

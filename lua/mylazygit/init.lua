@@ -313,6 +313,40 @@ local function git_fetch()
 	end, string.format("Fetched %s", config.remote))
 end
 
+local function switch_new_branch()
+	if not repo_required() then
+		return
+	end
+	vim.ui.input({ prompt = 'New branch name: ' }, function(name)
+		name = name and vim.trim(name) or nil
+		if not name or name == '' then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.switch_create(name))
+		end, string.format('Created and switched to %s', name))
+	end)
+end
+
+local function switch_branch()
+	if not repo_required() then
+		return
+	end
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify('No branches found', vim.log.levels.WARN)
+		return
+	end
+	vim.ui.select(branches, { prompt = 'Switch to branch' }, function(choice)
+		if not choice then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.switch(choice))
+		end, string.format('Switched to %s', choice))
+	end)
+end
+
 local function remote_add()
 	if not repo_required() then
 		return
@@ -367,6 +401,8 @@ local function set_keymaps()
 		{ lhs = "p", rhs = git_pull, desc = "Git pull" },
 		{ lhs = "P", rhs = git_push, desc = "Git push" },
 		{ lhs = "f", rhs = git_fetch, desc = "Git fetch" },
+		{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c" },
+		{ lhs = "b", rhs = switch_branch, desc = "Git switch branch" },
 		{ lhs = "R", rhs = remote_add, desc = "Git remote add" },
 		{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
 	})

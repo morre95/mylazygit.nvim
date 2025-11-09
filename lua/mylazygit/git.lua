@@ -67,6 +67,30 @@ function M.push(remote, branch)
   return system({ 'push', remote, branch })
 end
 
+function M.switch(branch)
+  return system({ 'switch', branch })
+end
+
+function M.switch_create(branch)
+  return system({ 'switch', '-c', branch })
+end
+
+function M.branches()
+  local ok, output = system({ 'branch', '--format', '%(refname:short)' }, { silent = true })
+  if not ok then
+    return {}
+  end
+  local branches = {}
+  for _, line in ipairs(output) do
+    local name = trim(line)
+    if name ~= '' then
+      table.insert(branches, name)
+    end
+  end
+  table.sort(branches)
+  return branches
+end
+
 function M.remote_add(name, url)
   return system({ 'remote', 'add', name, url })
 end
