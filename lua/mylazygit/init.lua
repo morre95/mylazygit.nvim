@@ -1,349 +1,397 @@
-local git = require('mylazygit.git')
-local ui = require('mylazygit.ui')
+local git = require("mylazygit.git")
+local ui = require("mylazygit.ui")
 
 local M = {}
 
 local config = {
-  remote = 'origin',
-  branch_fallback = 'main',
-  log_limit = 5,
-  diff_args = { '--stat' },
-  diff_max_lines = 80,
+	remote = "origin",
+	branch_fallback = "main",
+	log_limit = 5,
+	diff_args = { "--stat" },
+	diff_max_lines = 80,
 }
 
 local state = {
-  status = {},
+	status = {},
 }
 
 local function ensure_highlight(name, opts)
-  if vim.fn.hlexists(name) == 0 then
-    vim.api.nvim_set_hl(0, name, opts)
-  end
+	if vim.fn.hlexists(name) == 0 then
+		vim.api.nvim_set_hl(0, name, opts)
+	end
 end
 
 local function notify(msg, level)
-  vim.notify(msg, level or vim.log.levels.INFO, { title = 'MyLazyGit' })
+	vim.notify(msg, level or vim.log.levels.INFO, { title = "MyLazyGit" })
 end
 
 local function repo_required()
-  if git.is_repo() then
-    return true
-  end
-  notify('Not inside a git repository. Run `i` to init one.', vim.log.levels.WARN)
-  return false
+	if git.is_repo() then
+		return true
+	end
+	notify("Not inside a git repository. Run `i` to init one.", vim.log.levels.WARN)
+	return false
 end
 
 local function limit_lines(lines, max_lines)
-  if not max_lines or #lines <= max_lines then
-    return lines
-  end
+	if not max_lines or #lines <= max_lines then
+		return lines
+	end
 
-  local trimmed = {}
-  for i = 1, max_lines - 1 do
-    trimmed[i] = lines[i]
-  end
-  trimmed[max_lines] = string.format('... (%d more lines)', #lines - (max_lines - 1))
-  return trimmed
+	local trimmed = {}
+	for i = 1, max_lines - 1 do
+		trimmed[i] = lines[i]
+	end
+	trimmed[max_lines] = string.format("... (%d more lines)", #lines - (max_lines - 1))
+	return trimmed
 end
 
 local function collect_files(predicate)
-  local files = {}
-  for _, item in ipairs(state.status) do
-    if not predicate or predicate(item) then
-      table.insert(files, item.file)
-    end
-  end
-  return files
+	local files = {}
+	for _, item in ipairs(state.status) do
+		if not predicate or predicate(item) then
+			table.insert(files, item.file)
+		end
+	end
+	return files
 end
 
 local function select_multiple(files, prompt, on_done)
-  if vim.tbl_isempty(files) then
-    notify('No matching files for action: ' .. prompt, vim.log.levels.WARN)
-    return
-  end
+	if vim.tbl_isempty(files) then
+		notify("No matching files for action: " .. prompt, vim.log.levels.WARN)
+		return
+	end
 
-  local selected = {}
+	local selected = {}
 
-  local function step(available)
-    if vim.tbl_isempty(available) then
-      if #selected > 0 then
-        on_done(selected)
-      end
-      return
-    end
+	local function step(available)
+		if vim.tbl_isempty(available) then
+			if #selected > 0 then
+				on_done(selected)
+			end
+			return
+		end
 
-    vim.ui.select(available, { prompt = prompt .. ' (Esc to finish)' }, function(choice)
-      if not choice then
-        if #selected > 0 then
-          on_done(selected)
-        else
-          notify('Selection cancelled', vim.log.levels.INFO)
-        end
-        return
-      end
+		vim.ui.select(available, { prompt = prompt .. " (Esc to finish)" }, function(choice)
+			if not choice then
+				if #selected > 0 then
+					on_done(selected)
+				else
+					notify("Selection cancelled", vim.log.levels.INFO)
+				end
+				return
+			end
 
-      table.insert(selected, choice)
-      local remaining = {}
-      for _, item in ipairs(available) do
-        if item ~= choice then
-          table.insert(remaining, item)
-        end
-      end
+			table.insert(selected, choice)
+			local remaining = {}
+			for _, item in ipairs(available) do
+				if item ~= choice then
+					table.insert(remaining, item)
+				end
+			end
 
-      if vim.tbl_isempty(remaining) then
-        on_done(selected)
-      else
-        step(remaining)
-      end
-    end)
-  end
+			if vim.tbl_isempty(remaining) then
+				on_done(selected)
+			else
+				step(remaining)
+			end
+		end)
+	end
 
-  step(files)
+	step(files)
 end
 
 function M.refresh()
-  if not ui.is_open() then
-    return
-  end
+	if not ui.is_open() then
+		return
+	end
 
-  local lines = { 'MyLazyGit', '------------', '' }
-  local highlights = {}
+	local lines = { "MyLazyGit", "------------", "" }
+	local highlights = {}
 
-  if not git.is_repo() then
-    table.insert(lines, 'No git repository detected in current working directory.')
-    table.insert(lines, 'Press `i` to run `git init` or switch to a repo before opening MyLazyGit.')
-    ui.render(lines)
-    return
-  end
+	if not git.is_repo() then
+		table.insert(lines, "No git repository detected in current working directory.")
+		table.insert(lines, "Press `i` to run `git init` or switch to a repo before opening MyLazyGit.")
+		ui.render(lines)
+		return
+	end
 
-  state.status = git.parse_status()
+	state.status = git.parse_status()
 
-  local staged, unstaged, untracked = 0, 0, 0
-  for _, item in ipairs(state.status) do
-    if item.staged and item.staged:match('%S') then
-      staged = staged + 1
-    end
-    if item.unstaged and item.unstaged:match('%S') then
-      unstaged = unstaged + 1
-    end
-    if item.staged == '?' and item.unstaged == '?' then
-      untracked = untracked + 1
-    end
-    table.insert(lines, string.format('%s%s %s', item.staged, item.unstaged, item.file))
-  end
+	local staged, unstaged, untracked = 0, 0, 0
+	for _, item in ipairs(state.status) do
+		if item.staged and item.staged:match("%S") then
+			staged = staged + 1
+		end
+		if item.unstaged and item.unstaged:match("%S") then
+			unstaged = unstaged + 1
+		end
+		if item.staged == "?" and item.unstaged == "?" then
+			untracked = untracked + 1
+		end
+		table.insert(lines, string.format("%s%s %s", item.staged, item.unstaged, item.file))
+	end
 
-  if #state.status == 0 then
-    table.insert(lines, 'Working tree clean')
-  end
+	if #state.status == 0 then
+		table.insert(lines, "Working tree clean")
+	end
 
-  table.insert(lines, '')
-  table.insert(lines, string.format('Staged: %d | Unstaged: %d | Untracked: %d', staged, unstaged, untracked))
-  table.insert(lines, '')
-  table.insert(lines, 'Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit')
+	table.insert(lines, "")
+	table.insert(lines, string.format("Staged: %d | Unstaged: %d | Untracked: %d", staged, unstaged, untracked))
+	table.insert(lines, "")
+	table.insert(
+		lines,
+		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
+	)
+	table.insert(lines, "[R]emote_add [U](remote set-url)")
 
-  table.insert(lines, '')
-  local branch_for_log = git.current_branch() or config.branch_fallback
-  table.insert(lines, string.format('Recent commits (last %d):', config.log_limit))
-  local log_lines = git.log(config.log_limit)
-  local unpushed_set = {}
-  if branch_for_log then
-    for _, hash in ipairs(git.unpushed(config.remote, branch_for_log)) do
-      unpushed_set[hash] = true
-    end
-  end
+	table.insert(lines, "")
+	local branch_for_log = git.current_branch() or config.branch_fallback
+	table.insert(lines, string.format("Recent commits (last %d):", config.log_limit))
+	local log_lines = git.log(config.log_limit)
+	local unpushed_set = {}
+	if branch_for_log then
+		for _, hash in ipairs(git.unpushed(config.remote, branch_for_log)) do
+			unpushed_set[hash] = true
+		end
+	end
 
-  if vim.tbl_isempty(log_lines) then
-    table.insert(lines, '  No commits found')
-  else
-    for _, entry in ipairs(log_lines) do
-      table.insert(lines, string.format('  %s %s', entry.hash, entry.message))
-      local group = unpushed_set[entry.hash] and 'MyLazyGitUnpushed' or 'MyLazyGitPushed'
-      table.insert(highlights, {
-        line = #lines - 1,
-        group = group,
-        col_start = 0,
-        col_end = -1,
-      })
-    end
-  end
+	if vim.tbl_isempty(log_lines) then
+		table.insert(lines, "  No commits found")
+	else
+		for _, entry in ipairs(log_lines) do
+			table.insert(lines, string.format("  %s %s", entry.hash, entry.message))
+			local group = unpushed_set[entry.hash] and "MyLazyGitUnpushed" or "MyLazyGitPushed"
+			table.insert(highlights, {
+				line = #lines - 1,
+				group = group,
+				col_start = 0,
+				col_end = -1,
+			})
+		end
+	end
 
-  table.insert(lines, '')
-  local diff_args = config.diff_args or {}
-  local diff_label
-  if #diff_args > 0 then
-    diff_label = 'Diff preview (git diff ' .. table.concat(diff_args, ' ') .. '):'
-  else
-    diff_label = 'Diff preview (git diff):'
-  end
-  table.insert(lines, diff_label)
-  local diff_lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
-  if vim.tbl_isempty(diff_lines) then
-    table.insert(lines, '  Working tree clean (diff)')
-  else
-    for _, diff_line in ipairs(diff_lines) do
-      table.insert(lines, '  ' .. diff_line)
-    end
-  end
+	table.insert(lines, "")
+	local diff_args = config.diff_args or {}
+	local diff_label
+	if #diff_args > 0 then
+		diff_label = "Diff preview (git diff " .. table.concat(diff_args, " ") .. "):"
+	else
+		diff_label = "Diff preview (git diff):"
+	end
+	table.insert(lines, diff_label)
+	local diff_lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
+	if vim.tbl_isempty(diff_lines) then
+		table.insert(lines, "  Working tree clean (diff)")
+	else
+		for _, diff_line in ipairs(diff_lines) do
+			table.insert(lines, "  " .. diff_line)
+		end
+	end
 
-  ui.render(lines, highlights)
+	ui.render(lines, highlights)
 end
 
 local function run_and_refresh(fn, success_msg)
-  local ok = fn()
-  if ok and success_msg then
-    notify(success_msg)
-  end
-  if ok then
-    M.refresh()
-  end
+	local ok = fn()
+	if ok and success_msg then
+		notify(success_msg)
+	end
+	if ok then
+		M.refresh()
+	end
 end
 
 local function choose_file(prompt, predicate, cb)
-  predicate = predicate or function()
-    return true
-  end
-  local files = collect_files(predicate)
+	predicate = predicate or function()
+		return true
+	end
+	local files = collect_files(predicate)
 
-  if vim.tbl_isempty(files) then
-    notify('No matching files for action: ' .. prompt, vim.log.levels.WARN)
-    return
-  end
+	if vim.tbl_isempty(files) then
+		notify("No matching files for action: " .. prompt, vim.log.levels.WARN)
+		return
+	end
 
-  vim.ui.select(files, { prompt = prompt }, function(choice)
-    if not choice then
-      return
-    end
-    run_and_refresh(function()
-      local ok = cb(choice)
-      return ok
-    end)
-  end)
+	vim.ui.select(files, { prompt = prompt }, function(choice)
+		if not choice then
+			return
+		end
+		run_and_refresh(function()
+			local ok = cb(choice)
+			return ok
+		end)
+	end)
 end
 
 local function choose_files(prompt, predicate, cb, message_fn)
-  local files = collect_files(predicate)
-  select_multiple(files, prompt, function(selection)
-    run_and_refresh(function()
-      return cb(selection)
-    end, message_fn and message_fn(selection) or nil)
-  end)
+	local files = collect_files(predicate)
+	select_multiple(files, prompt, function(selection)
+		run_and_refresh(function()
+			return cb(selection)
+		end, message_fn and message_fn(selection) or nil)
+	end)
 end
 
 local function stage_file()
-  if not repo_required() then
-    return
-  end
-  choose_files('Stage files', nil, function(files)
-    return select(1, git.stage(files))
-  end, function(selection)
-    return string.format('Staged %d file(s)', #selection)
-  end)
+	if not repo_required() then
+		return
+	end
+	choose_files("Stage files", nil, function(files)
+		return select(1, git.stage(files))
+	end, function(selection)
+		return string.format("Staged %d file(s)", #selection)
+	end)
 end
 
 local function stage_all()
-  if not repo_required() then
-    return
-  end
-  run_and_refresh(function()
-    return select(1, git.stage({ '.' }))
-  end, 'Staged all changes (git add .)')
+	if not repo_required() then
+		return
+	end
+	run_and_refresh(function()
+		return select(1, git.stage({ "." }))
+	end, "Staged all changes (git add .)")
 end
 
 local function unstage_file()
-  if not repo_required() then
-    return
-  end
-  choose_file('Unstage file', function(item)
-    return item.staged ~= ' '
-  end, function(file)
-    return select(1, git.unstage(file))
-  end)
+	if not repo_required() then
+		return
+	end
+	choose_file("Unstage file", function(item)
+		return item.staged ~= " "
+	end, function(file)
+		return select(1, git.unstage(file))
+	end)
 end
 
 local function commit_changes()
-  if not repo_required() then
-    return
-  end
-  vim.ui.input({ prompt = 'Commit message: ' }, function(msg)
-    if not msg or vim.trim(msg) == '' then
-      return
-    end
-    run_and_refresh(function()
-      return select(1, git.commit(msg))
-    end, 'Commit created')
-  end)
+	if not repo_required() then
+		return
+	end
+	vim.ui.input({ prompt = "Commit message: " }, function(msg)
+		if not msg or vim.trim(msg) == "" then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.commit(msg))
+		end, "Commit created")
+	end)
 end
 
 local function git_init()
-  run_and_refresh(function()
-    return select(1, git.init())
-  end, 'Initialized empty git repository')
+	run_and_refresh(function()
+		return select(1, git.init())
+	end, "Initialized empty git repository")
 end
 
 local function git_pull()
-  if not repo_required() then
-    return
-  end
-  local branch = git.current_branch() or config.branch_fallback
-  run_and_refresh(function()
-    return select(1, git.pull(config.remote, branch))
-  end, string.format('Pulled %s/%s', config.remote, branch))
+	if not repo_required() then
+		return
+	end
+	local branch = git.current_branch() or config.branch_fallback
+	run_and_refresh(function()
+		return select(1, git.pull(config.remote, branch))
+	end, string.format("Pulled %s/%s", config.remote, branch))
 end
 
 local function git_push()
-  if not repo_required() then
-    return
-  end
-  local branch = git.current_branch() or config.branch_fallback
-  run_and_refresh(function()
-    return select(1, git.push(config.remote, branch))
-  end, string.format('Pushed to %s/%s', config.remote, branch))
+	if not repo_required() then
+		return
+	end
+	local branch = git.current_branch() or config.branch_fallback
+	run_and_refresh(function()
+		return select(1, git.push(config.remote, branch))
+	end, string.format("Pushed to %s/%s", config.remote, branch))
 end
 
 local function git_fetch()
-  if not repo_required() then
-    return
-  end
-  run_and_refresh(function()
-    return select(1, git.fetch(config.remote))
-  end, string.format('Fetched %s', config.remote))
+	if not repo_required() then
+		return
+	end
+	run_and_refresh(function()
+		return select(1, git.fetch(config.remote))
+	end, string.format("Fetched %s", config.remote))
+end
+
+local function remote_add()
+	if not repo_required() then
+		return
+	end
+	vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
+		name = name and vim.trim(name) or nil
+		if not name or name == "" then
+			return
+		end
+		vim.ui.input({ prompt = "Remote URL: " }, function(url)
+			url = url and vim.trim(url) or nil
+			if not url or url == "" then
+				return
+			end
+			run_and_refresh(function()
+				return select(1, git.remote_add(name, url))
+			end, string.format("Added remote %s", name))
+		end)
+	end)
+end
+
+local function remote_set_url()
+	if not repo_required() then
+		return
+	end
+	vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
+		name = name and vim.trim(name) or nil
+		if not name or name == "" then
+			return
+		end
+		vim.ui.input({ prompt = "New remote URL: " }, function(url)
+			url = url and vim.trim(url) or nil
+			if not url or url == "" then
+				return
+			end
+			run_and_refresh(function()
+				return select(1, git.remote_set_url(name, url))
+			end, string.format("Updated %s URL", name))
+		end)
+	end)
 end
 
 local function set_keymaps()
-  ui.set_keymaps({
-    { lhs = 'q', rhs = ui.close, desc = 'Quit MyLazyGit' },
-    { lhs = 'r', rhs = M.refresh, desc = 'Refresh status' },
-    { lhs = 's', rhs = stage_file, desc = 'Stage file' },
-    { lhs = 'a', rhs = stage_all, desc = 'Stage all (git add .)' },
-    { lhs = 'u', rhs = unstage_file, desc = 'Unstage file' },
-    { lhs = 'c', rhs = commit_changes, desc = 'Commit' },
-    { lhs = 'i', rhs = git_init, desc = 'Git init' },
-    { lhs = 'p', rhs = git_pull, desc = 'Git pull' },
-    { lhs = 'P', rhs = git_push, desc = 'Git push' },
-    { lhs = 'f', rhs = git_fetch, desc = 'Git fetch' },
-  })
+	ui.set_keymaps({
+		{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit" },
+		{ lhs = "r", rhs = M.refresh, desc = "Refresh status" },
+		{ lhs = "s", rhs = stage_file, desc = "Stage file" },
+		{ lhs = "a", rhs = stage_all, desc = "Stage all (git add .)" },
+		{ lhs = "u", rhs = unstage_file, desc = "Unstage file" },
+		{ lhs = "c", rhs = commit_changes, desc = "Commit" },
+		{ lhs = "i", rhs = git_init, desc = "Git init" },
+		{ lhs = "p", rhs = git_pull, desc = "Git pull" },
+		{ lhs = "P", rhs = git_push, desc = "Git push" },
+		{ lhs = "f", rhs = git_fetch, desc = "Git fetch" },
+		{ lhs = "R", rhs = remote_add, desc = "Git remote add" },
+		{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
+	})
 end
 
 function M.open()
-  ui.open()
-  set_keymaps()
-  M.refresh()
+	ui.open()
+	set_keymaps()
+	M.refresh()
 end
 
 function M.setup(opts)
-  config = vim.tbl_deep_extend('force', config, opts or {})
+	config = vim.tbl_deep_extend("force", config, opts or {})
 
-  ensure_highlight('MyLazyGitPushed', { link = 'DiffAdded' })
-  ensure_highlight('MyLazyGitUnpushed', { link = 'DiffRemoved' })
+	ensure_highlight("MyLazyGitPushed", { link = "DiffAdded" })
+	ensure_highlight("MyLazyGitUnpushed", { link = "DiffRemoved" })
 
-  if vim.fn.has('nvim-0.8') == 0 then
-    notify('MyLazyGit requires Neovim 0.8 or newer', vim.log.levels.ERROR)
-    return
-  end
+	if vim.fn.has("nvim-0.8") == 0 then
+		notify("MyLazyGit requires Neovim 0.8 or newer", vim.log.levels.ERROR)
+		return
+	end
 
-  vim.api.nvim_create_user_command('MyLazyGit', function()
-    M.open()
-  end, {})
+	vim.api.nvim_create_user_command("MyLazyGit", function()
+		M.open()
+	end, {})
 end
 
 return M

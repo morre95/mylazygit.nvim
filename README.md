@@ -60,6 +60,8 @@ Key | Action
 `p` | Pull from the configured remote/branch
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
+`R` | Run `git remote add` (prompts for name + URL)
+`U` | Run `git remote set-url` (prompts for name + URL)
 `i` | Run `git init`
 `q` | Close the window
 
