@@ -143,7 +143,7 @@ function M.refresh()
 		lines,
 		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
 	)
-	table.insert(lines, "[R]emote_add [U](remote set-url)")
+	table.insert(lines, "[R]emote add [U](remote set-url) [n]ew bransh [b]switch bransh")
 
 	table.insert(lines, "")
 	local branch_for_log = git.current_branch() or config.branch_fallback
@@ -317,14 +317,14 @@ local function switch_new_branch()
 	if not repo_required() then
 		return
 	end
-	vim.ui.input({ prompt = 'New branch name: ' }, function(name)
+	vim.ui.input({ prompt = "New branch name: " }, function(name)
 		name = name and vim.trim(name) or nil
-		if not name or name == '' then
+		if not name or name == "" then
 			return
 		end
 		run_and_refresh(function()
 			return select(1, git.switch_create(name))
-		end, string.format('Created and switched to %s', name))
+		end, string.format("Created and switched to %s", name))
 	end)
 end
 
@@ -334,16 +334,16 @@ local function switch_branch()
 	end
 	local branches = git.branches()
 	if vim.tbl_isempty(branches) then
-		notify('No branches found', vim.log.levels.WARN)
+		notify("No branches found", vim.log.levels.WARN)
 		return
 	end
-	vim.ui.select(branches, { prompt = 'Switch to branch' }, function(choice)
+	vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
 		if not choice then
 			return
 		end
 		run_and_refresh(function()
 			return select(1, git.switch(choice))
-		end, string.format('Switched to %s', choice))
+		end, string.format("Switched to %s", choice))
 	end)
 end
 
