@@ -14,19 +14,23 @@ local function add_highlight(hl)
 
   local line = hl.line or 0
   local col_start = hl.col_start or 0
-  local opts = {
+  local line_text = vim.api.nvim_buf_get_lines(state.buf, line, line + 1, false)[1] or ''
+  local line_len = #line_text
+
+  col_start = math.min(math.max(col_start, 0), line_len)
+
+  local col_end = hl.col_end
+  if not col_end or col_end < 0 then
+    col_end = line_len
+  end
+  col_end = math.max(col_start, math.min(col_end, line_len))
+
+  vim.api.nvim_buf_set_extmark(state.buf, namespace, line, col_start, {
     hl_group = hl.group,
     priority = hl.priority,
-  }
-
-  if hl.col_end and hl.col_end >= 0 then
-    opts.end_row = line
-    opts.end_col = hl.col_end
-  else
-    opts.hl_eol = true
-  end
-
-  vim.api.nvim_buf_set_extmark(state.buf, namespace, line, col_start, opts)
+    end_row = line,
+    end_col = col_end,
+  })
 end
 
 local function create_window()
