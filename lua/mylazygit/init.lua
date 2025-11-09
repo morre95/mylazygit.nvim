@@ -221,11 +221,7 @@ function M.refresh()
 	table.insert(lines, "")
 	table.insert(
 		lines,
-		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
-	)
-	table.insert(
-		lines,
-		"[R]emote add [U](remote set-url) [n]ew branch [b]switch branch [d]elete branch [D]force delete [?]help"
+		"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
 	)
 
 	ui.render(lines, highlights)
