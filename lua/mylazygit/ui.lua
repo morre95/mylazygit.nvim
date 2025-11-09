@@ -85,6 +85,13 @@ local function compute_dimensions()
 	return { width = width, height = height, row = row, col = col }
 end
 
+local function get_dimensions()
+	if not state.dimensions then
+		state.dimensions = compute_dimensions()
+	end
+	return state.dimensions
+end
+
 local function ensure_autocmd_group()
 	if state.autocmd_group and pcall(vim.api.nvim_get_autocmds, { group = state.autocmd_group }) then
 		return state.autocmd_group
@@ -141,12 +148,15 @@ local function track_focus(name, win)
 	vim.api.nvim_create_autocmd("WinEnter", {
 		group = group,
 		callback = function(args)
-			if args.win == win then
-				for idx, target in ipairs(state.focus_order) do
-					if target == name then
-						state.focus_index = idx
-						break
-					end
+			local triggered_win = (args and args.win) or vim.api.nvim_get_current_win()
+			if triggered_win ~= win then
+				return
+			end
+
+			for idx, target in ipairs(state.focus_order) do
+				if target == name then
+					state.focus_index = idx
+					break
 				end
 			end
 		end,
@@ -194,9 +204,12 @@ local function create_section(name, opts)
 end
 
 local function create_sections()
-	local dims = state.dimensions
-	local inner_width = dims.width - 4
-	local inner_height = dims.height - 4
+	local dims = get_dimensions()
+	if not dims then
+		return
+	end
+	local inner_width = math.max((dims.width or 0) - 4, 40)
+	local inner_height = math.max((dims.height or 0) - 4, 20)
 	local left_col = 2
 	local right_padding = 2
 	local left_width = math.floor(inner_width * 0.35)
