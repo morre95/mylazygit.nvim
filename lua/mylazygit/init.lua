@@ -525,6 +525,7 @@ local function show_keymap_popup()
 		col = math.max(math.floor((vim.o.columns - (width + 2)) / 2), 1),
 		border = "rounded",
 		style = "minimal",
+		zindex = 120,
 	})
 
 	local function close_popup()
