@@ -67,6 +67,20 @@ function M.push(remote, branch)
 	return system({ "push", remote, branch })
 end
 
+function M.merge(branch)
+	if not branch or branch == "" then
+		return false, { "Branch name required for merge" }
+	end
+	return system({ "merge", branch })
+end
+
+function M.rebase(branch)
+	if not branch or branch == "" then
+		return false, { "Branch name required for rebase" }
+	end
+	return system({ "rebase", branch })
+end
+
 function M.switch(branch)
 	return system({ "switch", branch })
 end

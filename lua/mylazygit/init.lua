@@ -180,12 +180,12 @@ function M.refresh()
 			title = " Preview ",
 			lines = { "Select a file from Worktree to see the live diff preview." },
 		},
-		keymap = {
-			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit",
-				"<Tab>/<S-Tab> cycle panes · Use cursor keys to move within a pane.",
+			keymap = {
+				lines = {
+					"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
+					"<Tab>/<S-Tab> cycle panes · Use cursor keys to move within a pane.",
+				},
 			},
-		},
 	}
 
 	if not git.is_repo() then
@@ -493,6 +493,74 @@ local function remote_set_url()
 	end)
 end
 
+local function merge_branch()
+	if not repo_required() then
+		return
+	end
+
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify("No branches found", vim.log.levels.WARN)
+		return
+	end
+
+	local current = git.current_branch()
+	local candidates = {}
+	for _, name in ipairs(branches) do
+		if not current or name ~= current then
+			table.insert(candidates, name)
+		end
+	end
+
+	if vim.tbl_isempty(candidates) then
+		notify("No other branches to merge", vim.log.levels.WARN)
+		return
+	end
+
+	vim.ui.select(candidates, { prompt = "Merge branch into current" }, function(choice)
+		if not choice then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.merge(choice))
+		end, string.format("Merged branch %s", choice))
+	end)
+end
+
+local function rebase_branch()
+	if not repo_required() then
+		return
+	end
+
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify("No branches found", vim.log.levels.WARN)
+		return
+	end
+
+	local current = git.current_branch()
+	local candidates = {}
+	for _, name in ipairs(branches) do
+		if not current or name ~= current then
+			table.insert(candidates, name)
+		end
+	end
+
+	if vim.tbl_isempty(candidates) then
+		notify("No other branches to rebase onto", vim.log.levels.WARN)
+		return
+	end
+
+	vim.ui.select(candidates, { prompt = "Rebase current branch onto" }, function(choice)
+		if not choice then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.rebase(choice))
+		end, string.format("Rebased onto %s", choice))
+	end)
+end
+
 local function show_keymap_popup()
 	local mappings = keymap_mappings or {}
 	if vim.tbl_isempty(mappings) then
@@ -600,6 +668,8 @@ keymap_mappings = {
 	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
 	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d" },
 	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D" },
+	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch" },
+	{ lhs = "M", rhs = rebase_branch, desc = "Git rebase branch" },
 	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help" },
 }
 
