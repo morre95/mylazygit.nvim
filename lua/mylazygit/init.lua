@@ -15,6 +15,8 @@ local state = {
 	status = {},
 }
 
+local keymap_mappings
+
 local function ensure_highlight(name, opts)
 	if vim.fn.hlexists(name) == 0 then
 		vim.api.nvim_set_hl(0, name, opts)
@@ -196,7 +198,10 @@ function M.refresh()
 		lines,
 		"Keymap: [r]efresh [s]tage (multi) [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [i]nit [q]uit"
 	)
-	table.insert(lines, "[R]emote add [U](remote set-url) [n]ew bransh [b]switch bransh")
+	table.insert(
+		lines,
+		"[R]emote add [U](remote set-url) [n]ew branch [b]switch branch [d]elete branch [D]force delete [?]help"
+	)
 
 	ui.render(lines, highlights)
 end
@@ -398,23 +403,120 @@ local function remote_set_url()
 	end)
 end
 
-local function set_keymaps()
-	ui.set_keymaps({
-		{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit" },
-		{ lhs = "r", rhs = M.refresh, desc = "Refresh status" },
-		{ lhs = "s", rhs = stage_file, desc = "Stage file" },
-		{ lhs = "a", rhs = stage_all, desc = "Stage all (git add .)" },
-		{ lhs = "u", rhs = unstage_file, desc = "Unstage file" },
-		{ lhs = "c", rhs = commit_changes, desc = "Commit" },
-		{ lhs = "i", rhs = git_init, desc = "Git init" },
-		{ lhs = "p", rhs = git_pull, desc = "Git pull" },
-		{ lhs = "P", rhs = git_push, desc = "Git push" },
-		{ lhs = "f", rhs = git_fetch, desc = "Git fetch" },
-		{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c" },
-		{ lhs = "b", rhs = switch_branch, desc = "Git switch branch" },
-		{ lhs = "R", rhs = remote_add, desc = "Git remote add" },
-		{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
+local function show_keymap_popup()
+	local mappings = keymap_mappings or {}
+	if vim.tbl_isempty(mappings) then
+		return
+	end
+
+	local lines = { "MyLazyGit Keymaps", "-----------------", "" }
+	for _, map in ipairs(mappings) do
+		local label = map.lhs and string.format("[%s]", map.lhs) or ""
+		local desc = map.desc or ""
+		table.insert(lines, string.format("%-8s %s", label, desc))
+	end
+
+	local width = 0
+	for _, line in ipairs(lines) do
+		width = math.max(width, vim.fn.strdisplaywidth(line))
+	end
+	local height = #lines
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+	vim.api.nvim_set_option_value("filetype", "mylazygit-help", { buf = buf })
+
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		width = width + 2,
+		height = height,
+		row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 1),
+		col = math.max(math.floor((vim.o.columns - (width + 2)) / 2), 1),
+		border = "rounded",
+		style = "minimal",
 	})
+
+	local function close_popup()
+		if win and vim.api.nvim_win_is_valid(win) then
+			vim.api.nvim_win_close(win, true)
+		end
+	end
+
+	vim.keymap.set("n", "q", close_popup, { buffer = buf, silent = true, nowait = true })
+	vim.keymap.set("n", "<Esc>", close_popup, { buffer = buf, silent = true, nowait = true })
+end
+
+local function delete_branch(force)
+	if not repo_required() then
+		return
+	end
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify("No branches found", vim.log.levels.WARN)
+		return
+	end
+	local current = git.current_branch()
+	local candidates = {}
+	for _, name in ipairs(branches) do
+		if not current or name ~= current then
+			table.insert(candidates, name)
+		end
+	end
+	if vim.tbl_isempty(candidates) then
+		notify("No other branches to delete", vim.log.levels.WARN)
+		return
+	end
+	local prompt = force and "Force delete branch (-D)" or "Delete branch (-d)"
+	vim.ui.select(candidates, { prompt = prompt }, function(choice)
+		if not choice then
+			return
+		end
+		local confirmation = vim.fn.confirm(
+			string.format("%s branch %s?", force and "Force delete" or "Delete", choice),
+			"&Yes\n&No",
+			2
+		)
+		if confirmation ~= 1 then
+			notify("Branch deletion cancelled", vim.log.levels.INFO)
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.delete_branch(choice, force))
+		end, string.format("%s branch %s", force and "Force deleted" or "Deleted", choice))
+	end)
+end
+
+local function delete_branch_safe()
+	delete_branch(false)
+end
+
+local function delete_branch_force()
+	delete_branch(true)
+end
+
+keymap_mappings = {
+	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit" },
+	{ lhs = "r", rhs = M.refresh, desc = "Refresh status" },
+	{ lhs = "s", rhs = stage_file, desc = "Stage file" },
+	{ lhs = "a", rhs = stage_all, desc = "Stage all (git add .)" },
+	{ lhs = "u", rhs = unstage_file, desc = "Unstage file" },
+	{ lhs = "c", rhs = commit_changes, desc = "Commit" },
+	{ lhs = "i", rhs = git_init, desc = "Git init" },
+	{ lhs = "p", rhs = git_pull, desc = "Git pull" },
+	{ lhs = "P", rhs = git_push, desc = "Git push" },
+	{ lhs = "f", rhs = git_fetch, desc = "Git fetch" },
+	{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c" },
+	{ lhs = "b", rhs = switch_branch, desc = "Git switch branch" },
+	{ lhs = "R", rhs = remote_add, desc = "Git remote add" },
+	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
+	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d" },
+	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D" },
+	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help" },
+}
+
+local function set_keymaps()
+	ui.set_keymaps(keymap_mappings)
 end
 
 function M.open()

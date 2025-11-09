@@ -99,6 +99,14 @@ function M.remote_set_url(name, url)
 	return system({ "remote", "set-url", name, url })
 end
 
+function M.delete_branch(name, force)
+	if not name or name == "" then
+		return false, { "Branch name required" }
+	end
+	local flag = force and "-D" or "-d"
+	return system({ "branch", flag, name })
+end
+
 local function upstream_ref(remote, branch)
 	local ok, output = system({ "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" }, { silent = true })
 	if ok and output[1] and output[1] ~= "" then
