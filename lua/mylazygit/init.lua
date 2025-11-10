@@ -1,5 +1,6 @@
 local git = require("mylazygit.git")
 local ui = require("mylazygit.ui")
+local helpers = require("mylazygit.helpers")
 
 local M = {}
 
@@ -507,7 +508,8 @@ local function commit_changes()
 	if not repo_required() then
 		return
 	end
-	vim.ui.input({ prompt = "Commit message: " }, function(msg)
+
+	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
 		if not msg or vim.trim(msg) == "" then
 			return
 		end
@@ -705,7 +707,6 @@ local function show_keymap_popup()
 		return
 	end
 
-	-- Bygg list-rader (med en liten header)
 	local header = { "MyLazyGit Keymaps", "-----------------", "" }
 	local list_lines = {}
 	for _, h in ipairs(header) do
@@ -831,7 +832,6 @@ local function show_keymap_popup()
 		end,
 	})
 
-	-- Stäng båda med q/ESC i båda fönster
 	local function close_all()
 		pcall(vim.api.nvim_del_augroup_by_name, "MyLazyGitKeymapPreview")
 		for _, w in ipairs({ win_list, win_prev }) do
