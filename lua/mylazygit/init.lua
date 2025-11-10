@@ -904,6 +904,7 @@ end
 -- TODO: Add explination to keymaps
 keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
+	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
 	{ lhs = "s", rhs = stage_file, desc = "Stage file", explain = "" },
 	{
