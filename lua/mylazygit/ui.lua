@@ -10,6 +10,7 @@ local state = {
 	bottom_view_order = { "local_branches", "remote_branches", "diff_preview" },
 	current_bottom_view_index = 1,
 	bottom_view_data = nil,
+	bottom_view_line = {},
 	keymaps = {},
 	handlers = {},
 	worktree_map = {},
@@ -194,12 +195,68 @@ local function set_bottom_view_name(name)
 end
 
 local function bottom_view_title(view_name, view_data, has_multiple)
-	local base = (view_data and view_data.title) or string.format(" %s ", bottom_view_labels[view_name] or "Diff preview")
+	local base = (view_data and view_data.title)
+		or string.format(" %s ", bottom_view_labels[view_name] or "Diff preview")
 	if not has_multiple then
 		return base
 	end
 	local trimmed = vim.trim(base)
 	return string.format(" %s [%d/%d] ", trimmed, state.current_bottom_view_index, bottom_view_count())
+end
+
+local function bottom_view_data_for(name)
+	local data = state.bottom_view_data or {}
+	if data.views and name then
+		return data.views[name]
+	end
+	if not data.views then
+		return data
+	end
+	return nil
+end
+
+local function handle_bottom_view_cursor(line)
+	local view_name = active_bottom_view_name()
+	if not view_name then
+		return
+	end
+
+	local view_data = bottom_view_data_for(view_name)
+	local total_lines = math.max((view_data and view_data.lines and #view_data.lines) or 0, 1)
+	local target_line = math.max(1, math.min(line or 1, total_lines))
+	state.bottom_view_line[view_name] = target_line
+
+	if view_name ~= "local_branches" then
+		return
+	end
+	if not state.handlers.on_local_branch_select then
+		return
+	end
+
+	local items = view_data and view_data.items
+	local branch = items and items[target_line]
+	if branch and branch ~= "" then
+		state.handlers.on_local_branch_select(branch)
+	end
+end
+
+local function attach_bottom_view_listener(buf, win)
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(win) then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(win)[1]
+			handle_bottom_view_cursor(line)
+		end,
+	})
+end
+
+local function diff_has_focus()
+	return state.focus_order[state.focus_index] == "diff"
 end
 
 local function render_bottom_view()
@@ -235,6 +292,23 @@ local function render_bottom_view()
 	})
 	set_section_title("diff", bottom_view_title(view_name, view_data, has_views))
 	apply_highlights(section.buf, (view_data and view_data.highlights) or {})
+
+	local total_lines = math.max(#lines, 1)
+	local stored_line = math.max(1, math.min(state.bottom_view_line[view_name] or 1, total_lines))
+	state.bottom_view_line[view_name] = stored_line
+
+	if section.win and vim.api.nvim_win_is_valid(section.win) then
+		pcall(vim.api.nvim_win_set_cursor, section.win, { stored_line, 0 })
+	end
+
+	if section.buf and not section.bottom_listener_attached then
+		attach_bottom_view_listener(section.buf, section.win)
+		section.bottom_listener_attached = true
+	end
+
+	if view_name == "local_branches" and diff_has_focus() then
+		handle_bottom_view_cursor(stored_line)
+	end
 end
 
 local function create_root()
@@ -300,6 +374,11 @@ local function track_focus(name, win)
 					state.focus_index = idx
 					break
 				end
+			end
+
+			if name == "diff" and active_bottom_view_name() == "local_branches" then
+				local line = state.bottom_view_line["local_branches"] or 1
+				handle_bottom_view_cursor(line)
 			end
 		end,
 	})
@@ -783,6 +862,7 @@ function M.open()
 	create_root()
 	state.bottom_view_data = nil
 	state.current_bottom_view_index = 1
+	state.bottom_view_line = {}
 	create_sections()
 	apply_keymaps()
 	M.reset_preview()
@@ -808,6 +888,7 @@ function M.close()
 	state.current_commit_line = 1
 	state.current_bottom_view_index = 1
 	state.bottom_view_data = nil
+	state.bottom_view_line = {}
 	state.focus_index = 1
 
 	if state.root then

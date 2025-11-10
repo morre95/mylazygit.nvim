@@ -134,9 +134,34 @@ local function show_preview_for_commit(entry)
 	})
 end
 
+local function show_branch_log(branch)
+	if not git.is_repo() then
+		ui.reset_preview()
+		return
+	end
+
+	if not branch or branch == "" then
+		ui.show_preview({
+			"Select a local branch to see its `git log --graph --decorate` output.",
+		}, { title = " Branch Log ", filetype = "git" })
+		return
+	end
+
+	local log_lines = git.branch_log(branch, config.log_limit)
+	if vim.tbl_isempty(log_lines) then
+		log_lines = { string.format("No commits found on %s.", branch) }
+	end
+
+	ui.show_preview(log_lines, {
+		title = string.format(" git log %s ", branch),
+		filetype = "git",
+	})
+end
+
 ui.set_handlers({
 	on_worktree_select = show_preview_for_file,
 	on_commit_select = show_preview_for_commit,
+	on_local_branch_select = show_branch_log,
 })
 
 local function collect_files(predicate)
@@ -352,6 +377,7 @@ function M.refresh()
 	end
 	layout.diff.views.local_branches.title = string.format(" Local Branches (%d) ", #local_branches)
 	layout.diff.views.local_branches.lines = local_branch_lines
+	layout.diff.views.local_branches.items = vim.list_extend({}, local_branches)
 
 	local remote_branches = git.remote_branches()
 	local remote_branch_lines = {}

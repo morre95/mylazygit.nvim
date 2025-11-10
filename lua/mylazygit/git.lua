@@ -182,6 +182,35 @@ function M.log(limit)
 	return entries
 end
 
+function M.branch_log(branch, limit)
+	if not branch or branch == "" then
+		return {}
+	end
+
+	limit = limit or 10
+	local ok, output = system({
+		"log",
+		string.format("-n%d", limit),
+		"--graph",
+		"--decorate",
+		"--oneline",
+		"--color=never",
+		branch,
+	}, { silent = true })
+
+	if not ok then
+		return {}
+	end
+
+	if vim.tbl_isempty(output) then
+		return {
+			string.format("No commits found on branch %s.", branch),
+		}
+	end
+
+	return output
+end
+
 function M.unpushed(remote, branch)
 	local upstream = upstream_ref(remote, branch)
 	if not upstream then
