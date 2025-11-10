@@ -107,6 +107,24 @@ function M.branches()
 	return branches
 end
 
+function M.remote_branches()
+	local ok, output = system({ "branch", "-r", "--format", "%(refname:short)" }, { silent = true })
+	if not ok then
+		return {}
+	end
+
+	local branches = {}
+	for _, line in ipairs(output) do
+		local name = trim(line)
+		if name ~= "" and not name:match("/HEAD$") then
+			table.insert(branches, name)
+		end
+	end
+
+	table.sort(branches)
+	return branches
+end
+
 function M.remote_add(name, url)
 	return system({ "remote", "add", name, url })
 end

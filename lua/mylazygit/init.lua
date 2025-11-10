@@ -13,7 +13,21 @@ local config = {
 
 local state = {
 	status = {},
+	active_bottom_view = "local_branches",
 }
+
+local bottom_view_names = {
+	local_branches = true,
+	remote_branches = true,
+	diff_preview = true,
+}
+
+local function normalize_bottom_view(view)
+	if view and bottom_view_names[view] then
+		return view
+	end
+	return "local_branches"
+end
 
 local keymap_mappings
 
@@ -193,6 +207,8 @@ function M.refresh()
 		return
 	end
 
+	state.active_bottom_view = normalize_bottom_view(ui.get_bottom_view() or state.active_bottom_view)
+
 	state.status = {}
 
 	local layout = {
@@ -212,19 +228,35 @@ function M.refresh()
 			highlights = {},
 		},
 		diff = {
-			title = " Diff preview ",
-			lines = {},
+			active_view = state.active_bottom_view,
+			views = {
+				local_branches = {
+					title = " Local Branches ",
+					lines = {},
+					filetype = "mylazygit-branches",
+				},
+				remote_branches = {
+					title = " Remote Branches ",
+					lines = {},
+					filetype = "mylazygit-branches",
+				},
+				diff_preview = {
+					title = " Diff preview ",
+					lines = {},
+					filetype = "mylazygit-diffsummary",
+				},
+			},
 		},
 		preview = {
 			title = " Preview ",
 			lines = { "Select a file from Worktree to see the live diff preview." },
 		},
-			keymap = {
-				lines = {
-					"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
-					"<Tab>/<S-Tab> cycle panes · Use cursor keys to move within a pane.",
-				},
+		keymap = {
+			lines = {
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
+				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
+		},
 	}
 
 	if not git.is_repo() then
@@ -234,7 +266,11 @@ function M.refresh()
 		}
 		layout.worktree.lines = { "Open a git repository to view worktree changes." }
 		layout.commits.lines = { "Commits unavailable outside a repository." }
-		layout.diff.lines = { "Diff preview unavailable outside a repository." }
+		layout.diff.views.local_branches.title = " Local Branches (0) "
+		layout.diff.views.local_branches.lines = { "Local branches unavailable outside a repository." }
+		layout.diff.views.remote_branches.title = " Remote Branches (0) "
+		layout.diff.views.remote_branches.lines = { "Remote branches unavailable outside a repository." }
+		layout.diff.views.diff_preview.lines = { "Diff preview unavailable outside a repository." }
 		layout.preview.lines = { "Git data unavailable until a repository is detected." }
 		ui.render(layout)
 		return
@@ -299,6 +335,32 @@ function M.refresh()
 		string.format("Remote %s · Log limit %d", config.remote, config.log_limit),
 	}
 
+	local local_branches = git.branches()
+	local local_branch_lines = {}
+	for _, name in ipairs(local_branches) do
+		local prefix = (branch and name == branch) and "*" or " "
+		table.insert(local_branch_lines, string.format("%s %s", prefix, name))
+	end
+	if vim.tbl_isempty(local_branch_lines) then
+		local_branch_lines = { "No local branches found. Create one with git switch -c <name>." }
+	end
+	layout.diff.views.local_branches.title = string.format(" Local Branches (%d) ", #local_branches)
+	layout.diff.views.local_branches.lines = local_branch_lines
+
+	local remote_branches = git.remote_branches()
+	local remote_branch_lines = {}
+	for _, name in ipairs(remote_branches) do
+		table.insert(remote_branch_lines, string.format("  %s", name))
+	end
+	if vim.tbl_isempty(remote_branch_lines) then
+		remote_branch_lines = {
+			string.format("No remote branches found for %s.", config.remote),
+			"Run git fetch to update remote references.",
+		}
+	end
+	layout.diff.views.remote_branches.title = string.format(" Remote Branches (%d) ", #remote_branches)
+	layout.diff.views.remote_branches.lines = remote_branch_lines
+
 	local branch_for_log = branch or config.branch_fallback
 	local log_lines = git.log(config.log_limit)
 	local unpushed_set = {}
@@ -327,8 +389,12 @@ function M.refresh()
 
 	local diff_args = config.diff_args or {}
 	local diff_label = (#diff_args > 0) and ("git diff " .. table.concat(diff_args, " ")) or "git diff"
-	layout.diff.title = string.format(" Diff preview (%s) ", diff_label)
-	layout.diff.lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
+	local diff_lines = limit_lines(git.diff(diff_args), config.diff_max_lines)
+	if vim.tbl_isempty(diff_lines) then
+		diff_lines = { "Working tree clean." }
+	end
+	layout.diff.views.diff_preview.title = string.format(" Diff preview (%s) ", diff_label)
+	layout.diff.views.diff_preview.lines = diff_lines
 
 	ui.render(layout)
 end
@@ -710,6 +776,8 @@ keymap_mappings = {
 	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D" },
 	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch" },
 	{ lhs = "M", rhs = rebase_branch, desc = "Git rebase branch" },
+	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view" },
+	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view" },
 	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help" },
 }
 

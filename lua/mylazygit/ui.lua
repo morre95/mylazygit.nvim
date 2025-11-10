@@ -7,6 +7,9 @@ local state = {
 	sections = {},
 	focus_order = { "worktree", "commits", "diff", "preview" },
 	focus_index = 1,
+	bottom_view_order = { "local_branches", "remote_branches", "diff_preview" },
+	current_bottom_view_index = 1,
+	bottom_view_data = nil,
 	keymaps = {},
 	handlers = {},
 	worktree_map = {},
@@ -18,6 +21,25 @@ local state = {
 	autocmd_group = nil,
 	dimensions = nil,
 }
+
+local bottom_view_labels = {
+	local_branches = "Local Branches",
+	remote_branches = "Remote Branches",
+	diff_preview = "Diff preview",
+}
+
+local function safe_tbl_count(tbl)
+	if type(vim.tbl_count) == "function" then
+		return vim.tbl_count(tbl or {})
+	end
+	local count = 0
+	if type(tbl) == "table" then
+		for _ in pairs(tbl) do
+			count = count + 1
+		end
+	end
+	return count
+end
 
 local function pad_lines(lines, total)
 	local padded = vim.list_extend({}, lines or {})
@@ -82,6 +104,28 @@ local function set_buffer_lines(buf, lines, opts)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
 end
 
+local function set_section_title(name, title)
+	local section = state.sections[name]
+	if not section or not title then
+		return
+	end
+	if not section.win or not vim.api.nvim_win_is_valid(section.win) then
+		return
+	end
+	local cfg = vim.api.nvim_win_get_config(section.win)
+	cfg.title = title
+	cfg.title_pos = cfg.title_pos or "left"
+	vim.api.nvim_win_set_config(section.win, cfg)
+	section.title = title
+end
+
+local function apply_highlights(buf, highlights)
+	vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
+	for _, hl in ipairs(highlights or {}) do
+		add_highlight(buf, hl)
+	end
+end
+
 local function compute_dimensions()
 	local columns = vim.o.columns
 	local lines = vim.o.lines
@@ -107,6 +151,90 @@ local function ensure_autocmd_group()
 	end
 	state.autocmd_group = vim.api.nvim_create_augroup("MyLazyGitUI", { clear = true })
 	return state.autocmd_group
+end
+
+local function bottom_view_count()
+	return #(state.bottom_view_order or {})
+end
+
+local function clamp_bottom_index(index)
+	local total = bottom_view_count()
+	if total == 0 then
+		return 0
+	end
+	index = (index - 1) % total + 1
+	return index
+end
+
+local function set_bottom_view_index(index)
+	if bottom_view_count() == 0 then
+		return
+	end
+	state.current_bottom_view_index = clamp_bottom_index(index)
+end
+
+local function active_bottom_view_name()
+	if bottom_view_count() == 0 then
+		return nil
+	end
+	state.current_bottom_view_index = clamp_bottom_index(state.current_bottom_view_index or 1)
+	return state.bottom_view_order[state.current_bottom_view_index]
+end
+
+local function set_bottom_view_name(name)
+	if not name then
+		return
+	end
+	for idx, view in ipairs(state.bottom_view_order) do
+		if view == name then
+			state.current_bottom_view_index = idx
+			return
+		end
+	end
+end
+
+local function bottom_view_title(view_name, view_data, has_multiple)
+	local base = (view_data and view_data.title) or string.format(" %s ", bottom_view_labels[view_name] or "Diff preview")
+	if not has_multiple then
+		return base
+	end
+	local trimmed = vim.trim(base)
+	return string.format(" %s [%d/%d] ", trimmed, state.current_bottom_view_index, bottom_view_count())
+end
+
+local function render_bottom_view()
+	local section = state.sections.diff
+	if not section then
+		return
+	end
+
+	local data = state.bottom_view_data or {}
+	local has_views = type(data.views) == "table" and safe_tbl_count(data.views) > 0
+	local view_name = active_bottom_view_name() or "diff_preview"
+	local view_data = nil
+	if has_views then
+		view_data = data.views[view_name]
+		if not view_data then
+			view_name = state.bottom_view_order[1]
+			state.current_bottom_view_index = 1
+			view_data = data.views[view_name]
+		end
+	else
+		view_data = data
+	end
+
+	view_data = view_data or {}
+
+	local lines = (view_data and view_data.lines) or {}
+	if vim.tbl_isempty(lines) then
+		lines = { "No data available" }
+	end
+
+	set_buffer_lines(section.buf, lines, {
+		filetype = (view_data and view_data.filetype) or data.filetype or "mylazygit-diffsummary",
+	})
+	set_section_title("diff", bottom_view_title(view_name, view_data, has_views))
+	apply_highlights(section.buf, (view_data and view_data.highlights) or {})
 end
 
 local function create_root()
@@ -293,28 +421,6 @@ local function create_sections()
 		title_pos = "center",
 		wrap = true,
 	})
-end
-
-local function set_section_title(name, title)
-	local section = state.sections[name]
-	if not section or not title then
-		return
-	end
-	if not section.win or not vim.api.nvim_win_is_valid(section.win) then
-		return
-	end
-	local cfg = vim.api.nvim_win_get_config(section.win)
-	cfg.title = title
-	cfg.title_pos = cfg.title_pos or "left"
-	vim.api.nvim_win_set_config(section.win, cfg)
-	section.title = title
-end
-
-local function apply_highlights(buf, highlights)
-	vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
-	for _, hl in ipairs(highlights or {}) do
-		add_highlight(buf, hl)
-	end
 end
 
 local function handle_worktree_cursor(line, opts)
@@ -510,16 +616,13 @@ local function render_commits(data)
 end
 
 local function render_diff(data)
-	local section = state.sections.diff
-	if not section then
-		return
+	state.bottom_view_data = data or {}
+	if data and data.active_view then
+		set_bottom_view_name(data.active_view)
+	elseif not (data and data.views) then
+		set_bottom_view_name("diff_preview")
 	end
-	local lines = data.lines or {}
-	if vim.tbl_isempty(lines) then
-		lines = { "Working tree clean" }
-	end
-	set_section_title("diff", data.title or section.title or " Diff preview ")
-	set_buffer_lines(section.buf, lines, { filetype = "mylazygit-diffsummary" })
+	render_bottom_view()
 end
 
 local function render_keymap(data)
@@ -614,6 +717,34 @@ function M.focus(name)
 	end
 end
 
+local function cycle_bottom_view(delta)
+	if bottom_view_count() == 0 then
+		return
+	end
+	set_bottom_view_index((state.current_bottom_view_index or 1) + delta)
+	render_bottom_view()
+end
+
+function M.bottom_view_next()
+	cycle_bottom_view(1)
+end
+
+function M.bottom_view_prev()
+	cycle_bottom_view(-1)
+end
+
+function M.bottom_view_set(name)
+	if not name then
+		return
+	end
+	set_bottom_view_name(name)
+	render_bottom_view()
+end
+
+function M.get_bottom_view()
+	return active_bottom_view_name()
+end
+
 function M.show_preview(lines, opts)
 	local section = state.sections.preview
 	if not section then
@@ -650,6 +781,8 @@ function M.open()
 		return state.root.buf, state.root.win
 	end
 	create_root()
+	state.bottom_view_data = nil
+	state.current_bottom_view_index = 1
 	create_sections()
 	apply_keymaps()
 	M.reset_preview()
@@ -673,6 +806,8 @@ function M.close()
 	state.current_commit_hash = nil
 	state.current_worktree_line = 1
 	state.current_commit_line = 1
+	state.current_bottom_view_index = 1
+	state.bottom_view_data = nil
 	state.focus_index = 1
 
 	if state.root then
