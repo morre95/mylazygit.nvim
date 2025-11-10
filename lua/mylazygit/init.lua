@@ -331,7 +331,13 @@ function M.refresh()
 	layout.worktree.highlights = worktree_highlights
 
 	layout.info.details = {
-		string.format("Files %d · Staged %d · Unstaged %d · Untracked %d", #state.status, staged, unstaged, untracked),
+		string.format(
+			"Files %d · Staged %d · Unstaged %d · Untracked %d",
+			#state.status,
+			staged,
+			unstaged,
+			untracked
+		),
 		string.format("Remote %s · Log limit %d", config.remote, config.log_limit),
 	}
 
@@ -667,6 +673,7 @@ local function rebase_branch()
 	end)
 end
 
+-- TODO: Add a right pane with more explinations when cycle throgh keymap with arrow keys
 local function show_keymap_popup()
 	local mappings = keymap_mappings or {}
 	if vim.tbl_isempty(mappings) then
