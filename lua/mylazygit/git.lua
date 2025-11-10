@@ -195,6 +195,17 @@ function M.diff(args)
 	return output
 end
 
+function M.log_patch(hash)
+	if not hash or hash == "" then
+		return {}
+	end
+	local ok, output = system({ "log", "-p", "-1", hash }, { silent = true })
+	if not ok then
+		return {}
+	end
+	return output
+end
+
 function M.current_branch()
 	local ok, output = system({ "rev-parse", "--abbrev-ref", "HEAD" }, { silent = true })
 	if not ok or #output == 0 then

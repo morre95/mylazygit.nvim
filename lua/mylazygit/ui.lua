@@ -10,8 +10,11 @@ local state = {
 	keymaps = {},
 	handlers = {},
 	worktree_map = {},
+	commit_map = {},
 	current_file = nil,
+	current_commit_hash = nil,
 	current_worktree_line = 1,
+	current_commit_line = 1,
 	autocmd_group = nil,
 	dimensions = nil,
 }
@@ -355,6 +358,42 @@ local function attach_worktree_listener(buf, win)
 	})
 end
 
+local function handle_commit_cursor(line, opts)
+	if not state.commit_map[line] then
+		if opts and opts.force and state.handlers.on_commit_select then
+			state.handlers.on_commit_select(nil)
+		end
+		return
+	end
+	local entry = state.commit_map[line]
+	if not entry then
+		return
+	end
+	if entry.hash == state.current_commit_hash and not (opts and opts.force) then
+		return
+	end
+	state.current_commit_hash = entry.hash
+	state.current_commit_line = line
+	if state.handlers.on_commit_select then
+		state.handlers.on_commit_select(entry)
+	end
+end
+
+local function attach_commit_listener(buf, win)
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(win) then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(win)[1]
+			handle_commit_cursor(line, { force = false })
+		end,
+	})
+end
+
 local function render_info(info)
 	if not state.root or not vim.api.nvim_buf_is_valid(state.root.buf) then
 		return
@@ -423,13 +462,51 @@ local function render_commits(data)
 	if not section then
 		return
 	end
+	local items = data.items or {}
+	state.commit_map = {}
+	for idx, entry in ipairs(items) do
+		state.commit_map[idx] = entry
+	end
+
 	local lines = data.lines or {}
 	if vim.tbl_isempty(lines) then
 		lines = { "No commits found" }
 	end
+
 	set_section_title("commits", data.title or section.title or " Commits ")
 	set_buffer_lines(section.buf, lines, { filetype = "mylazygit-commits" })
 	apply_highlights(section.buf, data.highlights)
+
+	if section.buf and not section.listener_attached then
+		attach_commit_listener(section.buf, section.win)
+		section.listener_attached = true
+	end
+
+	if not section.win or not vim.api.nvim_win_is_valid(section.win) then
+		return
+	end
+
+	local commits_focused = state.focus_order[state.focus_index] == "commits"
+	if #items > 0 then
+		local previous_line = math.max(state.current_commit_line or 1, 1)
+		local target_line = math.min(previous_line, #items)
+		state.current_commit_line = target_line
+		vim.api.nvim_win_set_cursor(section.win, { target_line, 0 })
+		if commits_focused then
+			handle_commit_cursor(target_line, { force = true })
+		else
+			local entry = state.commit_map[target_line]
+			if entry then
+				state.current_commit_hash = entry.hash
+			end
+		end
+	else
+		state.current_commit_line = 1
+		state.current_commit_hash = nil
+		if commits_focused then
+			handle_commit_cursor(1, { force = true })
+		end
+	end
 end
 
 local function render_diff(data)
@@ -591,8 +668,11 @@ function M.close()
 	end
 	state.sections = {}
 	state.worktree_map = {}
+	state.commit_map = {}
 	state.current_file = nil
+	state.current_commit_hash = nil
 	state.current_worktree_line = 1
+	state.current_commit_line = 1
 	state.focus_index = 1
 
 	if state.root then

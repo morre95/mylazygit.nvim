@@ -56,6 +56,20 @@ local function format_preview_title(file)
 	return string.format(" Preview: %s ", shortened)
 end
 
+local function format_commit_preview_title(entry)
+	if not entry or not entry.hash then
+		return " Commit Preview "
+	end
+	local message = entry.message and vim.trim(entry.message) or ""
+	if #message > 60 then
+		message = message:sub(1, 57) .. "..."
+	end
+	if message ~= "" then
+		return string.format(" Commit %s · %s ", entry.hash, message)
+	end
+	return string.format(" Commit %s ", entry.hash)
+end
+
 local function show_preview_for_file(file)
 	if not file or file == "" then
 		ui.reset_preview()
@@ -82,8 +96,33 @@ local function show_preview_for_file(file)
 	})
 end
 
+local function show_preview_for_commit(entry)
+	if not git.is_repo() then
+		ui.reset_preview()
+		return
+	end
+
+	if not entry or not entry.hash then
+		ui.show_preview({
+			"Select a commit to view its `git log -p` output.",
+		}, { title = " Commit Preview ", filetype = "git" })
+		return
+	end
+
+	local log_lines = git.log_patch(entry.hash)
+	if vim.tbl_isempty(log_lines) then
+		log_lines = { string.format("No `git log -p` output for %s", entry.hash) }
+	end
+
+	ui.show_preview(log_lines, {
+		title = format_commit_preview_title(entry),
+		filetype = "diff",
+	})
+end
+
 ui.set_handlers({
 	on_worktree_select = show_preview_for_file,
+	on_commit_select = show_preview_for_commit,
 })
 
 local function collect_files(predicate)
@@ -284,6 +323,7 @@ function M.refresh()
 
 	layout.commits.lines = commit_lines
 	layout.commits.highlights = commit_highlights
+	layout.commits.items = log_lines
 
 	local diff_args = config.diff_args or {}
 	local diff_label = (#diff_args > 0) and ("git diff " .. table.concat(diff_args, " ")) or "git diff"
