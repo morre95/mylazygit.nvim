@@ -673,50 +673,161 @@ local function rebase_branch()
 	end)
 end
 
--- TODO: Add a right pane with more explinations when cycle throgh keymap with arrow keys
 local function show_keymap_popup()
 	local mappings = keymap_mappings or {}
 	if vim.tbl_isempty(mappings) then
 		return
 	end
 
-	local lines = { "MyLazyGit Keymaps", "-----------------", "" }
+	-- Bygg list-rader (med en liten header)
+	local header = { "MyLazyGit Keymaps", "-----------------", "" }
+	local list_lines = {}
+	for _, h in ipairs(header) do
+		table.insert(list_lines, h)
+	end
+
 	for _, map in ipairs(mappings) do
 		local label = map.lhs and string.format("[%s]", map.lhs) or ""
 		local desc = map.desc or ""
-		table.insert(lines, string.format("%-8s %s", label, desc))
+		table.insert(list_lines, string.format("%-8s %s", label, desc))
 	end
 
-	local width = 0
-	for _, line in ipairs(lines) do
-		width = math.max(width, vim.fn.strdisplaywidth(line))
+	-- Dimensioner
+	local list_width = 0
+	for _, line in ipairs(list_lines) do
+		list_width = math.max(list_width, vim.fn.strdisplaywidth(line))
 	end
-	local height = #lines
-	local buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
-	vim.api.nvim_set_option_value("filetype", "mylazygit-help", { buf = buf })
+	-- Rimliga min/max och preview-bredd
+	list_width = math.min(math.max(list_width + 2, 32), math.floor(vim.o.columns * 0.45))
+	local preview_width = math.min(math.max(48, math.floor(vim.o.columns * 0.45)), vim.o.columns - list_width - 8)
 
-	local win = vim.api.nvim_open_win(buf, true, {
+	local height = math.min(#list_lines, vim.o.lines - 6)
+
+	-- Centrera två fönster som ett block
+	local total_width = list_width + preview_width + 2 -- +2 som “mellanrum”
+	local row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 1)
+	local col_left = math.max(math.floor((vim.o.columns - total_width) / 2), 1)
+	local col_right = col_left + list_width + 2
+
+	-- Buffers
+	local buf_list = vim.api.nvim_create_buf(false, true)
+	local buf_prev = vim.api.nvim_create_buf(false, true)
+
+	-- Buffers: metadata
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf_list })
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf_prev })
+
+	vim.api.nvim_buf_set_lines(buf_list, 0, -1, false, list_lines)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_list })
+	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_prev })
+
+	vim.api.nvim_set_option_value("filetype", "mylazygit-help", { buf = buf_list })
+	vim.api.nvim_set_option_value("filetype", "mylazygit-explain", { buf = buf_prev })
+
+	-- Fönster
+	local win_list = vim.api.nvim_open_win(buf_list, true, {
 		relative = "editor",
-		width = width + 2,
+		width = list_width,
 		height = height,
-		row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 1),
-		col = math.max(math.floor((vim.o.columns - (width + 2)) / 2), 1),
+		row = row,
+		col = col_left,
 		border = "rounded",
 		style = "minimal",
 		zindex = 120,
 	})
 
-	local function close_popup()
-		if win and vim.api.nvim_win_is_valid(win) then
-			vim.api.nvim_win_close(win, true)
+	local win_prev = vim.api.nvim_open_win(buf_prev, false, {
+		relative = "editor",
+		width = preview_width,
+		height = height,
+		row = row,
+		col = col_right,
+		border = "rounded",
+		style = "minimal",
+		zindex = 120,
+	})
+
+	-- Lite UX
+	vim.api.nvim_set_option_value("cursorline", true, { win = win_list })
+	vim.api.nvim_set_option_value("wrap", true, { win = win_prev })
+	vim.api.nvim_set_option_value("linebreak", true, { win = win_prev })
+	vim.api.nvim_set_option_value("breakindent", true, { win = win_prev })
+
+	-- Hjälpare: räkna om cursorrad -> index i mappings
+	local HEADER_LINES = #header
+	local function current_mapping_index()
+		local cur = vim.api.nvim_win_get_cursor(win_list)[1] -- 1-based
+		local idx = cur - HEADER_LINES
+		if idx < 1 or idx > #mappings then
+			return nil
+		end
+		return idx
+	end
+
+	-- Rendera preview för ett visst index
+	local function render_preview(idx)
+		local lines
+		if not idx then
+			lines = { "Move the marker to keymap to get more explination." }
+		else
+			local m = mappings[idx] or {}
+			local explain = m.explain
+			if type(explain) == "string" then
+				lines = vim.split(explain, "\n", { plain = true })
+			elseif type(explain) == "table" then
+				lines = explain
+			else
+				lines = { "No explanation available" }
+			end
+			-- Lägg till titelrad
+			local title = string.format("Explination %s", m.desc or m.lhs or "")
+			table.insert(lines, 1, title)
+			table.insert(lines, 2, string.rep("—", math.min(#title, preview_width - 2)))
+		end
+
+		vim.api.nvim_set_option_value("modifiable", true, { buf = buf_prev })
+		vim.api.nvim_buf_set_lines(buf_prev, 0, -1, false, lines)
+		vim.api.nvim_set_option_value("modifiable", false, { buf = buf_prev })
+		-- Scrolla till toppen vid uppdatering
+		vim.api.nvim_win_set_cursor(win_prev, { 1, 0 })
+	end
+
+	-- Init-preview
+	render_preview(current_mapping_index())
+
+	-- Uppdatera preview när markören flyttas i list-fönstret
+	local aug = vim.api.nvim_create_augroup("MyLazyGitKeymapPreview", { clear = false })
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+		group = aug,
+		buffer = buf_list,
+		callback = function()
+			render_preview(current_mapping_index())
+		end,
+	})
+
+	-- Stäng båda med q/ESC i båda fönster
+	local function close_all()
+		pcall(vim.api.nvim_del_augroup_by_name, "MyLazyGitKeymapPreview")
+		for _, w in ipairs({ win_list, win_prev }) do
+			if w and vim.api.nvim_win_is_valid(w) then
+				pcall(vim.api.nvim_win_close, w, true)
+			end
+		end
+		for _, b in ipairs({ buf_list, buf_prev }) do
+			if b and vim.api.nvim_buf_is_valid(b) then
+				pcall(vim.api.nvim_buf_delete, b, { force = true })
+			end
 		end
 	end
 
-	vim.keymap.set("n", "q", close_popup, { buffer = buf, silent = true, nowait = true })
-	vim.keymap.set("n", "<Esc>", close_popup, { buffer = buf, silent = true, nowait = true })
+	for _, buf in ipairs({ buf_list, buf_prev }) do
+		vim.keymap.set("n", "q", close_all, { buffer = buf, silent = true, nowait = true })
+		vim.keymap.set("n", "<Esc>", close_all, { buffer = buf, silent = true, nowait = true })
+	end
+
+	-- Låt j/k fungera som vanligt i listan (de är redan standard i Normal-läge).
+	-- Om du vill förhindra att man redigerar listan:
+	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_list })
 end
 
 local function delete_branch(force)
@@ -764,28 +875,34 @@ local function delete_branch_force()
 	delete_branch(true)
 end
 
+-- TODO: Add explination to keymaps
 keymap_mappings = {
-	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit" },
-	{ lhs = "r", rhs = M.refresh, desc = "Refresh status" },
-	{ lhs = "s", rhs = stage_file, desc = "Stage file" },
-	{ lhs = "a", rhs = stage_all, desc = "Stage all (git add .)" },
-	{ lhs = "u", rhs = unstage_file, desc = "Unstage file" },
-	{ lhs = "c", rhs = commit_changes, desc = "Commit" },
-	{ lhs = "i", rhs = git_init, desc = "Git init" },
-	{ lhs = "p", rhs = git_pull, desc = "Git pull" },
-	{ lhs = "P", rhs = git_push, desc = "Git push" },
-	{ lhs = "f", rhs = git_fetch, desc = "Git fetch" },
-	{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c" },
-	{ lhs = "b", rhs = switch_branch, desc = "Git switch branch" },
-	{ lhs = "R", rhs = remote_add, desc = "Git remote add" },
-	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url" },
-	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d" },
-	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D" },
-	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch" },
-	{ lhs = "M", rhs = rebase_branch, desc = "Git rebase branch" },
-	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view" },
-	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view" },
-	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help" },
+	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
+	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
+	{ lhs = "s", rhs = stage_file, desc = "Stage file", explain = "" },
+	{
+		lhs = "a",
+		rhs = stage_all,
+		desc = "Stage all (git add .)",
+		explain = "Stage all files at once. Same as 'git add .'",
+	},
+	{ lhs = "u", rhs = unstage_file, desc = "Unstage file", explain = "" },
+	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
+	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "" },
+	{ lhs = "p", rhs = git_pull, desc = "Git pull", explain = "" },
+	{ lhs = "P", rhs = git_push, desc = "Git push", explain = "" },
+	{ lhs = "f", rhs = git_fetch, desc = "Git fetch", explain = "" },
+	{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c", explain = "" },
+	{ lhs = "b", rhs = switch_branch, desc = "Git switch branch", explain = "" },
+	{ lhs = "R", rhs = remote_add, desc = "Git remote add", explain = "" },
+	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url", explain = "" },
+	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d", explain = "" },
+	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D", explain = "" },
+	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch", explain = "" },
+	{ lhs = "M", rhs = rebase_branch, desc = "Git rebase branch", explain = "" },
+	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
+	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view", explain = "" },
+	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help", explain = "" },
 }
 
 local function set_keymaps()
