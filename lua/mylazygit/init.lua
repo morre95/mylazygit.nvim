@@ -183,6 +183,10 @@ local function has_unstaged_change(char)
 	return char and char:match("%S") and char ~= "!"
 end
 
+local function has_untracked_change(staged_char, unstaged_char)
+	return staged_char == "?" and unstaged_char == "?"
+end
+
 local function select_multiple(files, prompt, on_done)
 	if vim.tbl_isempty(files) then
 		notify("No matching files for action: " .. prompt, vim.log.levels.WARN)
@@ -333,20 +337,32 @@ function M.refresh()
 			unstaged = item.unstaged,
 		})
 
+		local is_untracked = has_untracked_change(item.staged, item.unstaged)
+
 		if has_staged_change(item.staged) then
 			table.insert(worktree_highlights, {
 				line = idx - 1,
 				group = "MyLazyGitStagedIndicator",
 				col_start = 0,
-				col_end = 1,
+				col_end = -1,
 			})
 		end
-		if has_unstaged_change(item.unstaged) then
+
+		if is_untracked then
+			table.insert(worktree_highlights, {
+				line = idx - 1,
+				group = "MyLazyGitUntrackedIndicator",
+				col_start = 0,
+				col_end = -1,
+			})
+		end
+
+		if not is_untracked and has_unstaged_change(item.unstaged) then
 			table.insert(worktree_highlights, {
 				line = idx - 1,
 				group = "MyLazyGitUnstagedIndicator",
-				col_start = 1,
-				col_end = 2,
+				col_start = 0,
+				col_end = -1,
 			})
 		end
 	end
@@ -949,6 +965,7 @@ function M.setup(opts)
 	ensure_highlight("MyLazyGitUnpushed", { link = "DiffRemoved" })
 	ensure_highlight("MyLazyGitStagedIndicator", { fg = "#98C379" })
 	ensure_highlight("MyLazyGitUnstagedIndicator", { fg = "#E5C07B" })
+	ensure_highlight("MyLazyGitUntrackedIndicator", { fg = "#9E9E9E" })
 
 	if vim.fn.has("nvim-0.8") == 0 then
 		notify("MyLazyGit requires Neovim 0.8 or newer", vim.log.levels.ERROR)
