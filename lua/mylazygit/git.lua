@@ -157,10 +157,11 @@ function M.fetch(remote)
 end
 
 function M.log(limit)
-	limit = limit or 5
+	limit = limit or -1
 	local ok, output = system({
 		"log",
-		string.format("-n%d", limit),
+		-- string.format("-n%d", limit),
+		string.format("--max-count=%d", limit),
 		"--pretty=format:%h%x01%s",
 	}, { silent = true })
 	if not ok then
@@ -187,10 +188,11 @@ function M.branch_log(branch, limit)
 		return {}
 	end
 
-	limit = limit or 10
+	limit = limit or -1
 	local ok, output = system({
 		"log",
-		string.format("-n%d", limit),
+		-- string.format("-n%d", limit),
+		string.format("--max-count=%d", limit),
 		"--graph",
 		"--decorate",
 		"--oneline",

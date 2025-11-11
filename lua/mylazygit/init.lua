@@ -2,12 +2,16 @@ local git = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
 
+-- TODO: Add 'git pull --reabase' command
+
 local M = {}
 
 local config = {
 	remote = "origin",
 	branch_fallback = "main",
 	log_limit = 5,
+	max_commit_lines = 100,
+	max_branch_lines = 100,
 	diff_args = { "--stat" },
 	diff_max_lines = 80,
 }
@@ -148,7 +152,7 @@ local function show_branch_log(branch)
 		return
 	end
 
-	local log_lines = git.branch_log(branch, config.log_limit)
+	local log_lines = git.branch_log(branch, config.max_branch_lines)
 	if vim.tbl_isempty(log_lines) then
 		log_lines = { string.format("No commits found on %s.", branch) }
 	end
@@ -253,7 +257,7 @@ function M.refresh()
 			highlights = {},
 		},
 		commits = {
-			title = string.format(" Commits (last %d) ", config.log_limit),
+			title = " Commits ", --string.format(" Commits (last %d) ", config.log_limit),
 			lines = {},
 			highlights = {},
 		},
@@ -385,34 +389,41 @@ function M.refresh()
 
 	local local_branches = git.branches()
 	local local_branch_lines = {}
+
 	for _, name in ipairs(local_branches) do
 		local prefix = (branch and name == branch) and "*" or " "
 		table.insert(local_branch_lines, string.format("%s %s", prefix, name))
 	end
+
 	if vim.tbl_isempty(local_branch_lines) then
 		local_branch_lines = { "No local branches found. Create one with git switch -c <name>." }
 	end
+
 	layout.diff.views.local_branches.title = string.format(" Local Branches (%d) ", #local_branches)
 	layout.diff.views.local_branches.lines = local_branch_lines
 	layout.diff.views.local_branches.items = vim.list_extend({}, local_branches)
 
 	local remote_branches = git.remote_branches()
 	local remote_branch_lines = {}
+
 	for _, name in ipairs(remote_branches) do
 		table.insert(remote_branch_lines, string.format("  %s", name))
 	end
+
 	if vim.tbl_isempty(remote_branch_lines) then
 		remote_branch_lines = {
 			string.format("No remote branches found for %s.", config.remote),
 			"Run git fetch to update remote references.",
 		}
 	end
+
 	layout.diff.views.remote_branches.title = string.format(" Remote Branches (%d) ", #remote_branches)
 	layout.diff.views.remote_branches.lines = remote_branch_lines
 
 	local branch_for_log = branch or config.branch_fallback
-	local log_lines = git.log(config.log_limit)
+	local log_lines = git.log(config.max_commit_lines)
 	local unpushed_set = {}
+
 	if branch_for_log then
 		for _, hash in ipairs(git.unpushed(config.remote, branch_for_log)) do
 			unpushed_set[hash] = true
@@ -432,6 +443,7 @@ function M.refresh()
 		})
 	end
 
+	layout.commits.title = string.format(" Commits (%d) ", #commit_lines)
 	layout.commits.lines = commit_lines
 	layout.commits.highlights = commit_highlights
 	layout.commits.items = log_lines
@@ -574,7 +586,8 @@ local function switch_new_branch()
 	if not repo_required() then
 		return
 	end
-	vim.ui.input({ prompt = "New branch name: " }, function(name)
+
+	helpers.centered_input({ prompt = "New branch", title = "Name" }, function(name)
 		name = name and vim.trim(name) or nil
 		if not name or name == "" then
 			return
@@ -583,6 +596,16 @@ local function switch_new_branch()
 			return select(1, git.switch_create(name))
 		end, string.format("Created and switched to %s", name))
 	end)
+
+	-- vim.ui.input({ prompt = "New branch name: " }, function(name)
+	-- 	name = name and vim.trim(name) or nil
+	-- 	if not name or name == "" then
+	-- 		return
+	-- 	end
+	-- 	run_and_refresh(function()
+	-- 		return select(1, git.switch_create(name))
+	-- 	end, string.format("Created and switched to %s", name))
+	-- end)
 end
 
 local function switch_branch()
