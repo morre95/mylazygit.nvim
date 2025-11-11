@@ -70,6 +70,116 @@ function M.centered_input(opts, on_confirm)
 end
 
 function M.centered_dual_input(opts, on_confirm)
+	opts = opts or {}
+
+	local prompt1 = (opts.prompt1 or "First") .. ": "
+	local prompt2 = (opts.prompt2 or "Second") .. ": "
+
+	local title = opts.title or "Input"
+
+	-- Compute sizing
+	local content_w = math.max(#prompt1 + #(opts.default1 or ""), #prompt2 + #(opts.default2 or ""))
+	local width = math.min(math.max(content_w + 10, 40), math.floor(vim.o.columns * 0.7))
+	local height = 2
+
+	local row = math.floor((vim.o.lines - height) / 2) - 1
+	local col = math.floor((vim.o.columns - width) / 2)
+
+	-- Buffer and window
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value("buftype", "prompt", { buf = buf })
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+	vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		row = row,
+		col = col,
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = title,
+		title_pos = "center",
+		noautocmd = true,
+		zindex = 100,
+	})
+
+	-- Style adjustments
+	vim.api.nvim_set_option_value("winhl", "Normal:Normal,FloatBorder:FloatBorder", { win = win })
+	vim.api.nvim_set_option_value("cursorline", false, { win = win })
+	vim.api.nvim_set_option_value("number", false, { win = win })
+	vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+
+	-- Close helper
+	local function close()
+		if vim.api.nvim_win_is_valid(win) then
+			pcall(vim.api.nvim_win_close, win, true)
+		end
+		if vim.api.nvim_buf_is_valid(buf) then
+			pcall(vim.api.nvim_buf_delete, buf, { force = true })
+		end
+	end
+
+	-- Handle cancel
+	local function cancel()
+		close()
+		vim.cmd.stopinsert()
+		if on_confirm then
+			on_confirm(nil, nil)
+		end
+	end
+
+	vim.keymap.set("i", "<Esc>", cancel, { buffer = buf, nowait = true })
+	vim.keymap.set("i", "<C-c>", cancel, { buffer = buf, nowait = true })
+
+	-- Two-line prompt
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+		prompt1 .. (opts.default1 or ""),
+		prompt2 .. (opts.default2 or ""),
+	})
+
+	vim.fn.prompt_setprompt(buf, "") -- disable automatic prompt insertion
+
+	-- Extract user input from a line
+	local function strip_prompt(line, prompt)
+		if line:sub(1, #prompt) == prompt then
+			return line:sub(#prompt + 1)
+		end
+		return line
+	end
+
+	-- Callback when Enter pressed on any line
+	vim.fn.prompt_setcallback(buf, function()
+		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		if not lines or #lines < 2 then
+			cancel()
+			return
+		end
+
+		local v1 = strip_prompt(lines[1], prompt1)
+		local v2 = strip_prompt(lines[2], prompt2)
+
+		close()
+		vim.cmd.stopinsert()
+
+		if on_confirm then
+			on_confirm(v1, v2)
+		end
+	end)
+
+	-- Put cursor after default1 on line 1
+	vim.defer_fn(function()
+		if vim.api.nvim_win_is_valid(win) then
+			local startcol = #(prompt1 .. (opts.default1 or ""))
+			pcall(vim.api.nvim_win_set_cursor, win, { 1, math.max(startcol, 0) })
+		end
+	end, 1)
+
+	vim.cmd.startinsert()
+end
+
+function M.centered_dual_input2(opts, on_confirm)
 	local defaults = {
 		prompt1 = "Input 1",
 		prompt2 = "Input 2",
