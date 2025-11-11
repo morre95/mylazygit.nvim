@@ -40,6 +40,7 @@ function M.centered_input(opts, on_confirm)
 	vim.fn.prompt_setprompt(buf, prompt)
 	vim.fn.prompt_setcallback(buf, function(input)
 		close()
+		vim.cmd.stopinsert()
 		if on_confirm then
 			on_confirm(input)
 		end
@@ -47,12 +48,14 @@ function M.centered_input(opts, on_confirm)
 
 	vim.keymap.set("i", "<Esc>", function()
 		close()
+		vim.cmd.stopinsert()
 		if on_confirm then
 			on_confirm(nil)
 		end
 	end, { buffer = buf, nowait = true })
 	vim.keymap.set("i", "<C-c>", function()
 		close()
+		vim.cmd.stopinsert()
 		if on_confirm then
 			on_confirm(nil)
 		end
@@ -132,6 +135,7 @@ function M.centered_dual_input(opts, on_confirm)
 	local function submit()
 		local value1, value2 = get_values()
 		close()
+		vim.cmd.stopinsert()
 		if on_confirm then
 			on_confirm(value1, value2)
 		end
@@ -139,6 +143,7 @@ function M.centered_dual_input(opts, on_confirm)
 
 	local function cancel()
 		close()
+		vim.cmd.stopinsert()
 		if on_confirm then
 			on_confirm(nil, nil)
 		end
