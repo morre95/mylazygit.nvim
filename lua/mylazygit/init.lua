@@ -611,21 +611,39 @@ local function remote_add()
 	if not repo_required() then
 		return
 	end
-	vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
-		name = name and vim.trim(name) or nil
-		if not name or name == "" then
-			return
-		end
-		vim.ui.input({ prompt = "Remote URL: " }, function(url)
-			url = url and vim.trim(url) or nil
-			if not url or url == "" then
-				return
-			end
+
+	helpers.centered_dual_input({
+		title = "Add remote",
+		prompt1 = "Name",
+		prompt2 = "Url",
+		default1 = config.remote,
+	}, function(name, url)
+		if name and url then
+			url = vim.trim(url)
+			name = vim.trim(name)
 			run_and_refresh(function()
 				return select(1, git.remote_add(name, url))
 			end, string.format("Added remote %s", name))
-		end)
+		else
+			notify("No remote added")
+			return
+		end
 	end)
+	-- vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
+	-- 	name = name and vim.trim(name) or nil
+	-- 	if not name or name == "" then
+	-- 		return
+	-- 	end
+	-- 	vim.ui.input({ prompt = "Remote URL: " }, function(url)
+	-- 		url = url and vim.trim(url) or nil
+	-- 		if not url or url == "" then
+	-- 			return
+	-- 		end
+	-- 		run_and_refresh(function()
+	-- 			return select(1, git.remote_add(name, url))
+	-- 		end, string.format("Added remote %s", name))
+	-- 	end)
+	-- end)
 end
 
 local function remote_set_url()

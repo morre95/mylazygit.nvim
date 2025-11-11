@@ -66,4 +66,124 @@ function M.centered_input(opts, on_confirm)
 	vim.cmd.startinsert()
 end
 
+function M.centered_dual_input(opts, on_confirm)
+	local defaults = {
+		prompt1 = "Input 1",
+		prompt2 = "Input 2",
+		title = "Input",
+		default1 = "",
+		default2 = "",
+	}
+	opts = vim.tbl_deep_extend("force", defaults, opts or {})
+
+	local prompt1 = opts.prompt1
+	local prompt2 = opts.prompt2
+	local width = math.min(math.max(math.max(#prompt1, #prompt2) + 80, 40), math.floor(vim.o.columns * 0.7))
+	local height = 4 -- 2 rader för prompts + 2 rader för input
+	local row = math.floor((vim.o.lines - height) / 2) - 1
+	local col = math.floor((vim.o.columns - width) / 2)
+
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+	vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		row = row,
+		col = col,
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = opts.title or "Input",
+		title_pos = "center",
+		noautocmd = true,
+		zindex = 100,
+	})
+
+	-- Sätt upp innehållet
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+		prompt1 .. ": " .. (opts.default1 or ""),
+		"",
+		prompt2 .. ": " .. (opts.default2 or ""),
+		"",
+	})
+
+	-- Placera cursor på första input-raden
+	vim.api.nvim_win_set_cursor(win, { 1, #prompt1 + 2 })
+
+	local function close()
+		if vim.api.nvim_win_is_valid(win) then
+			pcall(vim.api.nvim_win_close, win, true)
+		end
+		if vim.api.nvim_buf_is_valid(buf) then
+			pcall(vim.api.nvim_buf_delete, buf, { force = true })
+		end
+	end
+
+	local function get_values()
+		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		local value1 = lines[1]:sub(#prompt1 + 3)
+		local value2 = lines[3]:sub(#prompt2 + 3)
+		return value1, value2
+	end
+
+	local function submit()
+		local value1, value2 = get_values()
+		close()
+		if on_confirm then
+			on_confirm(value1, value2)
+		end
+	end
+
+	local function cancel()
+		close()
+		if on_confirm then
+			on_confirm(nil, nil)
+		end
+	end
+
+	-- Keymaps
+	vim.keymap.set("i", "<CR>", function()
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		if cursor[1] == 1 then
+			-- På första raden, gå till andra
+			vim.api.nvim_win_set_cursor(win, { 3, #prompt2 + 2 })
+		else
+			-- På andra raden, submit
+			submit()
+		end
+	end, { buffer = buf, nowait = true })
+
+	vim.keymap.set("i", "<Tab>", function()
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		if cursor[1] == 1 then
+			vim.api.nvim_win_set_cursor(win, { 3, #prompt2 + 2 })
+		else
+			vim.api.nvim_win_set_cursor(win, { 1, #prompt1 + 2 })
+		end
+	end, { buffer = buf, nowait = true })
+
+	vim.keymap.set("i", "<S-Tab>", function()
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		if cursor[1] == 3 then
+			vim.api.nvim_win_set_cursor(win, { 1, #prompt1 + 2 })
+		else
+			vim.api.nvim_win_set_cursor(win, { 3, #prompt2 + 2 })
+		end
+	end, { buffer = buf, nowait = true })
+
+	vim.keymap.set("i", "<Esc>", cancel, { buffer = buf, nowait = true })
+	vim.keymap.set("i", "<C-c>", cancel, { buffer = buf, nowait = true })
+
+	-- Styling
+	vim.api.nvim_set_option_value("winhl", "Normal:Normal,FloatBorder:FloatBorder", { win = win })
+	vim.api.nvim_set_option_value("cursorline", false, { win = win })
+	vim.api.nvim_set_option_value("number", false, { win = win })
+	vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+
+	vim.cmd.startinsert()
+end
+
 return M
