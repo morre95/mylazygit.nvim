@@ -596,16 +596,6 @@ local function switch_new_branch()
 			return select(1, git.switch_create(name))
 		end, string.format("Created and switched to %s", name))
 	end)
-
-	-- vim.ui.input({ prompt = "New branch name: " }, function(name)
-	-- 	name = name and vim.trim(name) or nil
-	-- 	if not name or name == "" then
-	-- 		return
-	-- 	end
-	-- 	run_and_refresh(function()
-	-- 		return select(1, git.switch_create(name))
-	-- 	end, string.format("Created and switched to %s", name))
-	-- end)
 end
 
 local function switch_branch()
@@ -652,42 +642,50 @@ local function remote_add()
 			return
 		end
 	end)
-	-- vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
-	-- 	name = name and vim.trim(name) or nil
-	-- 	if not name or name == "" then
-	-- 		return
-	-- 	end
-	-- 	vim.ui.input({ prompt = "Remote URL: " }, function(url)
-	-- 		url = url and vim.trim(url) or nil
-	-- 		if not url or url == "" then
-	-- 			return
-	-- 		end
-	-- 		run_and_refresh(function()
-	-- 			return select(1, git.remote_add(name, url))
-	-- 		end, string.format("Added remote %s", name))
-	-- 	end)
-	-- end)
 end
 
 local function remote_set_url()
 	if not repo_required() then
 		return
 	end
-	vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
-		name = name and vim.trim(name) or nil
-		if not name or name == "" then
-			return
-		end
-		vim.ui.input({ prompt = "New remote URL: " }, function(url)
-			url = url and vim.trim(url) or nil
-			if not url or url == "" then
-				return
-			end
+	local remote_url = git.remote_get_url()
+	if not remote_url then
+		remote_url = ""
+	end
+	notify(remote_url)
+	helpers.centered_dual_input({
+		title = "Set remote url",
+		prompt1 = "Name",
+		prompt2 = "Url",
+		default1 = config.remote,
+		default2 = remote_url,
+	}, function(name, url)
+		if name and url then
+			url = vim.trim(url)
+			name = vim.trim(name)
 			run_and_refresh(function()
 				return select(1, git.remote_set_url(name, url))
-			end, string.format("Updated %s URL", name))
-		end)
+			end, string.format("Remote URL updated: %s", name))
+		else
+			notify("Remote url did not update!!!")
+			return
+		end
 	end)
+	-- vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
+	-- 	name = name and vim.trim(name) or nil
+	-- 	if not name or name == "" then
+	-- 		return
+	-- 	end
+	-- 	vim.ui.input({ prompt = "New remote URL: " }, function(url)
+	-- 		url = url and vim.trim(url) or nil
+	-- 		if not url or url == "" then
+	-- 			return
+	-- 		end
+	-- 		run_and_refresh(function()
+	-- 			return select(1, git.remote_set_url(name, url))
+	-- 		end, string.format("Updated %s URL", name))
+	-- 	end)
+	-- end)
 end
 
 local function merge_branch()

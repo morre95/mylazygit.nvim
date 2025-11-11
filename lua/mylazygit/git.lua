@@ -133,6 +133,18 @@ function M.remote_set_url(name, url)
 	return system({ "remote", "set-url", name, url })
 end
 
+function M.remote_get_url()
+	local ok, output = system({
+		"config",
+		"--get",
+		"remote.origin.url",
+	})
+	if ok and output[1] and output[1] ~= "" then
+		return trim(output[1])
+	end
+	return false
+end
+
 function M.delete_branch(name, force)
 	if not name or name == "" then
 		return false, { "Branch name required" }
