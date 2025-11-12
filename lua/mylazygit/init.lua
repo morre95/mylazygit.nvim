@@ -283,10 +283,6 @@ function M.refresh()
 				},
 			},
 		},
-		preview = {
-			title = " Preview ",
-			lines = { "Select a file from Worktree to see the live diff preview." },
-		},
 		keymap = {
 			lines = {
 				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
@@ -307,7 +303,10 @@ function M.refresh()
 		layout.diff.views.remote_branches.title = " Remote Branches (0) "
 		layout.diff.views.remote_branches.lines = { "Remote branches unavailable outside a repository." }
 		layout.diff.views.diff_preview.lines = { "Diff preview unavailable outside a repository." }
-		layout.preview.lines = { "Git data unavailable until a repository is detected." }
+		layout.preview = {
+			title = " Preview ",
+			lines = { "Git data unavailable until a repository is detected." },
+		}
 		ui.render(layout)
 		return
 	end

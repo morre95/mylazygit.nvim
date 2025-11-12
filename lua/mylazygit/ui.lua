@@ -29,16 +29,6 @@ local bottom_view_labels = {
 	diff_preview = "Diff preview",
 }
 
-local function has_staged_worktree_files()
-	for _, item in pairs(state.worktree_map or {}) do
-		local char = item and item.staged
-		if char and char:match("%S") and char ~= "?" and char ~= "!" then
-			return true
-		end
-	end
-	return false
-end
-
 local function safe_tbl_count(tbl)
 	if type(vim.tbl_count) == "function" then
 		return vim.tbl_count(tbl or {})
@@ -464,13 +454,11 @@ local function track_focus(name, win)
 			end
 
 			if name == "worktree" then
-				if has_staged_worktree_files() then
-					local line = state.current_worktree_line or 1
-					if vim.api.nvim_win_is_valid(win) then
-						line = (vim.api.nvim_win_get_cursor(win) or { line })[1] or line
-					end
-					handle_worktree_cursor(line, { force = true })
+				local line = state.current_worktree_line or 1
+				if vim.api.nvim_win_is_valid(win) then
+					line = (vim.api.nvim_win_get_cursor(win) or { line })[1] or line
 				end
+				handle_worktree_cursor(line, { force = true })
 			end
 
 			if name == "commits" then
@@ -878,7 +866,7 @@ function M.render(payload)
 	render_worktree(payload.worktree or {})
 	render_commits(payload.commits or {})
 	render_diff(payload.diff or {})
-	render_preview(payload.preview or {})
+	render_preview(payload.preview)
 	render_keymap(payload.keymap or {})
 end
 
