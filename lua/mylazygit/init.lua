@@ -2,8 +2,6 @@ local git = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
 
--- TODO: Add 'git pull --reabase' command
-
 local M = {}
 
 local config = {
@@ -675,21 +673,6 @@ local function remote_set_url()
 			return
 		end
 	end)
-	-- vim.ui.input({ prompt = "Remote name: ", default = config.remote }, function(name)
-	-- 	name = name and vim.trim(name) or nil
-	-- 	if not name or name == "" then
-	-- 		return
-	-- 	end
-	-- 	vim.ui.input({ prompt = "New remote URL: " }, function(url)
-	-- 		url = url and vim.trim(url) or nil
-	-- 		if not url or url == "" then
-	-- 			return
-	-- 		end
-	-- 		run_and_refresh(function()
-	-- 			return select(1, git.remote_set_url(name, url))
-	-- 		end, string.format("Updated %s URL", name))
-	-- 	end)
-	-- end)
 end
 
 local function merge_branch()
@@ -739,7 +722,10 @@ local function merge_workflow()
 		return
 	end
 	if not git.has_local_branch(main_branch) then
-		notify(string.format("Local branch %s not found. Checkout or create it first.", main_branch), vim.log.levels.ERROR)
+		notify(
+			string.format("Local branch %s not found. Checkout or create it first.", main_branch),
+			vim.log.levels.ERROR
+		)
 		return
 	end
 
@@ -771,11 +757,14 @@ local function merge_workflow()
 			return
 		end
 		run_and_refresh(function()
-			return select(1, git.merge_workflow({
-				main_branch = main_branch,
-				feature_branch = choice,
-				rebase_args = workflow_cfg.rebase_args,
-			}))
+			return select(
+				1,
+				git.merge_workflow({
+					main_branch = main_branch,
+					feature_branch = choice,
+					rebase_args = workflow_cfg.rebase_args,
+				})
+			)
 		end, string.format("Workflow merged %s into %s", choice, main_branch))
 	end)
 end
@@ -1088,8 +1077,8 @@ end
 function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
 
-	ensure_highlight("MyLazyGitPushed", { link = "DiffAdded" })
-	ensure_highlight("MyLazyGitUnpushed", { link = "DiffRemoved" })
+	ensure_highlight("MyLazyGitPushed", { fg = "#98C379" })
+	ensure_highlight("MyLazyGitUnpushed", { fg = "#CD5C5C" })
 	ensure_highlight("MyLazyGitStagedIndicator", { fg = "#98C379" })
 	ensure_highlight("MyLazyGitUnstagedIndicator", { fg = "#E5C07B" })
 	ensure_highlight("MyLazyGitUntrackedIndicator", { fg = "#9E9E9E" })
