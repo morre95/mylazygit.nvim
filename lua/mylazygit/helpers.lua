@@ -74,12 +74,14 @@ function M.centered_dual_input(opts, on_confirm)
 
 	local prompt1 = (opts.prompt1 or "First") .. ": "
 	local prompt2 = (opts.prompt2 or "Second") .. ": "
+	local default1 = opts.default1 or ""
+	local default2 = opts.default2 or ""
 
 	local title = opts.title or "Input"
 
 	-- Compute sizing
-	local content_w = math.max(#prompt1 + #(opts.default1 or ""), #prompt2 + #(opts.default2 or ""))
-	local width = math.min(math.max(content_w + 10, 40), math.floor(vim.o.columns * 0.7))
+	local content_w = math.max(#(prompt1 .. default1), #(prompt2 .. default2))
+	local width = math.min(math.max(content_w + 40, 80), math.floor(vim.o.columns * 0.7))
 	local height = 2
 
 	local row = math.floor((vim.o.lines - height) / 2) - 1
@@ -87,7 +89,7 @@ function M.centered_dual_input(opts, on_confirm)
 
 	-- Buffer and window
 	local buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_set_option_value("buftype", "prompt", { buf = buf })
+	vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
 	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
 	vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
 
@@ -135,24 +137,47 @@ function M.centered_dual_input(opts, on_confirm)
 
 	-- Two-line prompt
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
-		prompt1 .. (opts.default1 or ""),
-		prompt2 .. (opts.default2 or ""),
+		prompt1 .. default1,
+		prompt2 .. default2,
 	})
 
-	vim.fn.prompt_setprompt(buf, "") -- disable automatic prompt insertion
-
-	-- Extract user input from a line
+	-- Extract user input from a line, even if the prompt was partially deleted.
 	local function strip_prompt(line, prompt)
 		if line:sub(1, #prompt) == prompt then
 			return line:sub(#prompt + 1)
 		end
+
+		for i = #prompt - 1, 1, -1 do
+			local prefix = prompt:sub(1, i)
+			if line:sub(1, i) == prefix then
+				return line:sub(i + 1)
+			end
+		end
+
+		for i = 2, #prompt do
+			local suffix = prompt:sub(i)
+			if suffix ~= "" and line:sub(1, #suffix) == suffix then
+				return line:sub(#suffix + 1)
+			end
+		end
+
 		return line
 	end
 
-	-- Callback when Enter pressed on any line
-	vim.fn.prompt_setcallback(buf, function()
+	local function get_lines()
+		if not vim.api.nvim_buf_is_valid(buf) then
+			return nil
+		end
 		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 		if not lines or #lines < 2 then
+			return nil
+		end
+		return lines
+	end
+
+	local function submit()
+		local lines = get_lines()
+		if not lines then
 			cancel()
 			return
 		end
@@ -166,15 +191,87 @@ function M.centered_dual_input(opts, on_confirm)
 		if on_confirm then
 			on_confirm(v1, v2)
 		end
-	end)
+	end
 
 	-- Put cursor after default1 on line 1
-	vim.defer_fn(function()
-		if vim.api.nvim_win_is_valid(win) then
-			local startcol = #(prompt1 .. (opts.default1 or ""))
-			pcall(vim.api.nvim_win_set_cursor, win, { 1, math.max(startcol, 0) })
+	local function focus_line(idx)
+		if not (vim.api.nvim_win_is_valid(win) and vim.api.nvim_buf_is_valid(buf)) then
+			return
 		end
+		local line = vim.api.nvim_buf_get_lines(buf, idx - 1, idx, false)[1] or ""
+		pcall(vim.api.nvim_win_set_cursor, win, { idx, math.max(#line, 0) })
+	end
+
+	local function toggle_focus()
+		if not vim.api.nvim_win_is_valid(win) then
+			return
+		end
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		if cursor[1] == 1 then
+			focus_line(2)
+		else
+			focus_line(1)
+		end
+	end
+
+	local function ensure_prompt(line_idx, prompt)
+		if not vim.api.nvim_buf_is_valid(buf) then
+			return
+		end
+		local line = vim.api.nvim_buf_get_lines(buf, line_idx - 1, line_idx, false)[1] or ""
+		if line:sub(1, #prompt) ~= prompt then
+			local value = strip_prompt(line, prompt)
+			vim.api.nvim_buf_set_lines(buf, line_idx - 1, line_idx, false, { prompt .. value })
+		end
+	end
+
+	local function enforce_prompts()
+		ensure_prompt(1, prompt1)
+		ensure_prompt(2, prompt2)
+	end
+
+	local function clamp_cursor()
+		if not vim.api.nvim_win_is_valid(win) then
+			return
+		end
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		local prompt = cursor[1] == 1 and prompt1 or prompt2
+		local min_col = #prompt
+		if cursor[2] < min_col then
+			vim.api.nvim_win_set_cursor(win, { cursor[1], min_col })
+		end
+	end
+
+	local augroup = vim.api.nvim_create_augroup("CenteredDualInput" .. buf, { clear = true })
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		buffer = buf,
+		group = augroup,
+		callback = function()
+			enforce_prompts()
+			clamp_cursor()
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+		buffer = buf,
+		group = augroup,
+		callback = clamp_cursor,
+	})
+
+	vim.defer_fn(function()
+		focus_line(1)
 	end, 1)
+
+	vim.keymap.set("i", "<CR>", function()
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		if cursor[1] == 1 then
+			focus_line(2)
+		else
+			submit()
+		end
+	end, { buffer = buf, nowait = true })
+
+	vim.keymap.set("i", "<Tab>", toggle_focus, { buffer = buf, nowait = true })
+	vim.keymap.set("i", "<S-Tab>", toggle_focus, { buffer = buf, nowait = true })
 
 	vim.cmd.startinsert()
 end

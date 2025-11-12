@@ -956,6 +956,29 @@ local function delete_branch_force()
 	delete_branch(true)
 end
 
+-- NOTE: ta bort denna när du är färdig med testning
+local function test_dual_input()
+	helpers.centered_dual_input({
+		title = "Test",
+		prompt1 = "Name",
+		prompt2 = "Email",
+		default1 = "ett",
+		default2 = "två",
+	}, function(value1, value2)
+		if value1 == "ett" then
+			notify("Japp det är ett " .. value1, vim.log.levels.INFO)
+		else
+			notify("Ett är här: " .. value1)
+		end
+
+		if value2 == "två" then
+			notify("Japp det är två " .. value2)
+		else
+			notify("Två är här: " .. value2, vim.log.levels.DEBUG)
+		end
+	end)
+end
+
 -- TODO: Add explination to keymaps
 keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
@@ -985,6 +1008,7 @@ keymap_mappings = {
 	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
 	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view", explain = "" },
 	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help", explain = "" },
+	{ lhs = "ö", rhs = test_dual_input, desc = "A test function", explain = "Should be deleted" },
 }
 
 local function set_keymaps()
