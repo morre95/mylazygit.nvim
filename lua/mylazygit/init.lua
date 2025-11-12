@@ -9,6 +9,10 @@ local M = {}
 local config = {
 	remote = "origin",
 	branch_fallback = "main",
+	merge_workflow = {
+		main_branch = "main",
+		rebase_args = {},
+	},
 	log_limit = 5,
 	max_commit_lines = 100,
 	max_branch_lines = 100,
@@ -722,6 +726,60 @@ local function merge_branch()
 	end)
 end
 
+local function merge_workflow()
+	if not repo_required() then
+		return
+	end
+
+	local workflow_cfg = config.merge_workflow or {}
+	local main_branch = workflow_cfg.main_branch or config.branch_fallback or "main"
+
+	if not main_branch or main_branch == "" then
+		notify("Set `merge_workflow.main_branch` in setup() to use this command.", vim.log.levels.ERROR)
+		return
+	end
+	if not git.has_local_branch(main_branch) then
+		notify(string.format("Local branch %s not found. Checkout or create it first.", main_branch), vim.log.levels.ERROR)
+		return
+	end
+
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify("No branches found", vim.log.levels.WARN)
+		return
+	end
+
+	local candidates = {}
+	for _, name in ipairs(branches) do
+		if name ~= main_branch then
+			table.insert(candidates, name)
+		end
+	end
+
+	if vim.tbl_isempty(candidates) then
+		notify(string.format("No branch to merge into %s", main_branch), vim.log.levels.WARN)
+		return
+	end
+
+	local prompt = string.format("Workflow: merge branch into %s", main_branch)
+	vim.ui.select(candidates, { prompt = prompt }, function(choice)
+		if not choice then
+			return
+		end
+		if not git.has_local_branch(choice) then
+			notify(string.format("Branch %s no longer exists locally.", choice), vim.log.levels.WARN)
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.merge_workflow({
+				main_branch = main_branch,
+				feature_branch = choice,
+				rebase_args = workflow_cfg.rebase_args,
+			}))
+		end, string.format("Workflow merged %s into %s", choice, main_branch))
+	end)
+end
+
 local function rebase_branch()
 	if not repo_required() then
 		return
@@ -1004,6 +1062,12 @@ keymap_mappings = {
 	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d", explain = "" },
 	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D", explain = "" },
 	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch", explain = "" },
+	{
+		lhs = "w",
+		rhs = merge_workflow,
+		desc = "Merge workflow",
+		explain = "Checkout main, pull, rebase branch, and merge back",
+	},
 	{ lhs = "M", rhs = rebase_branch, desc = "Git rebase branch", explain = "" },
 	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
 	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view", explain = "" },

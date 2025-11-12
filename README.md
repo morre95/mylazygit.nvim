@@ -9,6 +9,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
 - Run `git init`, `git pull`, `git push`, and `git fetch` against a configurable remote
+- One-key merge workflow that rebases a feature branch on main before merging it back
 - Refresh view at any time to keep the status in sync
 
 ## Installation
@@ -22,6 +23,10 @@ return {
     require('mylazygit').setup({
       remote = 'origin',        -- change if you use something else
       branch_fallback = 'main', -- used when HEAD is detached
+      merge_workflow = {
+        main_branch = 'main',   -- base branch for the workflow helper
+        rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
+      },
       log_limit = 5,            -- number of commits shown in the panel
       diff_args = { '--stat' }, -- passed to `git diff`
       diff_max_lines = 80,      -- trim diff panel for readability
@@ -41,6 +46,8 @@ return {
   end,
 }
 ```
+
+> **Note:** The workflow operates only on local branches. It will pull a branch only when it has an upstream configured (`branch@{upstream}`); otherwise the pull step is skipped. Interactive rebases (e.g. `rebase_args = { '-i' }`) still require a working `$GIT_SEQUENCE_EDITOR` inside Neovim (many users rely on `nvr --remote-wait`); without that setup Git will block waiting for an editor.
 
 The plugin registers a `:MyLazyGit` command. Map it or call it directly:
 
@@ -65,6 +72,7 @@ Key | Action
 `R` | Run `git remote add` (prompts for name + URL)
 `U` | Run `git remote set-url` (prompts for name + URL)
 `i` | Run `git init`
+`w` | Run the merge workflow (`checkout main` → `pull` → `checkout branch` → `pull` → `rebase` → `merge`)
 `q` | Close the window
 
 The floating buffer is read-only and safe to keep open while editing. MyLazyGit automatically redraws after every git action so the status never goes stale.

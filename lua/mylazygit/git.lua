@@ -81,6 +81,107 @@ function M.rebase(branch)
 	return system({ "rebase", branch })
 end
 
+local function local_branch_ref(branch)
+	if not branch or branch == "" then
+		return nil
+	end
+	return string.format("refs/heads/%s", branch)
+end
+
+function M.has_local_branch(branch)
+	local ref = local_branch_ref(branch)
+	if not ref then
+		return false
+	end
+	return select(1, system({ "show-ref", "--verify", ref }, { silent = true }))
+end
+
+function M.branch_upstream(branch)
+	if not branch or branch == "" then
+		return nil
+	end
+	local spec = string.format("%s@{upstream}", branch)
+	local ok, output = system({ "rev-parse", "--abbrev-ref", spec }, { silent = true })
+	if not ok or not output[1] then
+		return nil
+	end
+	local full = trim(output[1])
+	if full == "" then
+		return nil
+	end
+	local remote, upstream_branch = full:match("^([^/]+)/(.+)$")
+	if not remote or remote == "" or not upstream_branch or upstream_branch == "" then
+		return nil
+	end
+	return { remote = remote, branch = upstream_branch }
+end
+
+function M.merge_workflow(opts)
+	opts = opts or {}
+	local main_branch = opts.main_branch
+	local feature_branch = opts.feature_branch
+	local rebase_args = vim.deepcopy(opts.rebase_args or {})
+
+	if not main_branch or main_branch == "" then
+		return false, { "Main branch is required for merge workflow" }
+	end
+	if not feature_branch or feature_branch == "" then
+		return false, { "Feature branch is required for merge workflow" }
+	end
+	if not M.has_local_branch(main_branch) then
+		return false, { string.format("Local branch %s not found", main_branch) }
+	end
+	if not M.has_local_branch(feature_branch) then
+		return false, { string.format("Local branch %s not found", feature_branch) }
+	end
+
+	local function pull_step(branch)
+		local upstream = M.branch_upstream(branch)
+		if not upstream then
+			return nil
+		end
+		local label = string.format("pull %s (%s/%s)", branch, upstream.remote, upstream.branch)
+		return {
+			label = label,
+			args = { "pull", upstream.remote, upstream.branch },
+		}
+	end
+
+	local steps = {
+		{ label = string.format("checkout %s", main_branch), args = { "checkout", main_branch } },
+	}
+	local pull_main = pull_step(main_branch)
+	if pull_main then
+		table.insert(steps, pull_main)
+	end
+	table.insert(steps, { label = string.format("checkout %s", feature_branch), args = { "checkout", feature_branch } })
+	local pull_feature = pull_step(feature_branch)
+	if pull_feature then
+		table.insert(steps, pull_feature)
+	end
+
+	local rebase_cmd = { "rebase" }
+	if type(rebase_args) == "table" then
+		vim.list_extend(rebase_cmd, rebase_args)
+	end
+	table.insert(rebase_cmd, main_branch)
+	table.insert(steps, { label = string.format("rebase %s onto %s", feature_branch, main_branch), args = rebase_cmd })
+
+	table.insert(steps, { label = string.format("checkout %s", main_branch), args = { "checkout", main_branch } })
+	table.insert(steps, { label = string.format("merge %s", feature_branch), args = { "merge", feature_branch } })
+
+	for _, step in ipairs(steps) do
+		local ok, output = system(step.args)
+		if not ok then
+			local msg = string.format("Merge workflow failed while attempting to %s", step.label)
+			local details = output or {}
+			table.insert(details, 1, msg)
+			return false, details
+		end
+	end
+
+	return true, { string.format("Merge workflow completed for %s -> %s", feature_branch, main_branch) }
+end
 function M.switch(branch)
 	return system({ "switch", branch })
 end
