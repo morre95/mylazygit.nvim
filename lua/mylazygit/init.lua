@@ -1039,9 +1039,19 @@ keymap_mappings = {
 	},
 	{ lhs = "u", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
-	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "git init. Creates a new git repo" },
-	{ lhs = "p", rhs = git_pull, desc = "Pull", explain = "git pull" },
-	{ lhs = "P", rhs = git_push, desc = "Push", explain = "git push" },
+	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
+	{
+		lhs = "p",
+		rhs = git_pull,
+		desc = "Pull",
+		explain = "Git pull will incorporates changes from a remote repository into the current branch.",
+	},
+	{
+		lhs = "P",
+		rhs = git_push,
+		desc = "Push",
+		explain = "Git push will update the remote repository with the local changes",
+	},
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
 	{
 		lhs = "n",
