@@ -1048,9 +1048,9 @@ keymap_mappings = {
 	{ lhs = "b", rhs = switch_branch, desc = "Git switch branch", explain = "" },
 	{ lhs = "R", rhs = remote_add, desc = "Git remote add", explain = "" },
 	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url", explain = "" },
-	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d", explain = "" },
-	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D", explain = "" },
-	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch", explain = "" },
+	{ lhs = "d", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
+	{ lhs = "D", rhs = delete_branch_force, desc = "Delete branch force", explain = "git branch -D <branch-name>" },
+	{ lhs = "m", rhs = merge_branch, desc = "Merge branch", explain = "git merge <branch-name>" },
 	{
 		lhs = "w",
 		rhs = merge_workflow,

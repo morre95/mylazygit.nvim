@@ -29,6 +29,16 @@ local bottom_view_labels = {
 	diff_preview = "Diff preview",
 }
 
+local function has_staged_worktree_files()
+	for _, item in pairs(state.worktree_map or {}) do
+		local char = item and item.staged
+		if char and char:match("%S") and char ~= "?" and char ~= "!" then
+			return true
+		end
+	end
+	return false
+end
+
 local function safe_tbl_count(tbl)
 	if type(vim.tbl_count) == "function" then
 		return vim.tbl_count(tbl or {})
@@ -387,6 +397,47 @@ local function attach_commit_listener(buf, win)
 	})
 end
 
+local function handle_worktree_cursor(line, opts)
+	if not state.worktree_map[line] then
+		if opts and opts.force then
+			state.current_file = nil
+			if state.handlers.on_worktree_select then
+				state.handlers.on_worktree_select(nil)
+			else
+				M.reset_preview()
+			end
+		end
+		return
+	end
+	local file = state.worktree_map[line].file
+	if not file then
+		return
+	end
+	if file == state.current_file and not (opts and opts.force) then
+		return
+	end
+	state.current_file = file
+	state.current_worktree_line = line
+	if state.handlers.on_worktree_select then
+		state.handlers.on_worktree_select(file)
+	end
+end
+
+local function attach_worktree_listener(buf, win)
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(win) then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(win)[1]
+			handle_worktree_cursor(line, { force = false })
+		end,
+	})
+end
+
 local function track_focus(name, win)
 	if not win then
 		return
@@ -409,6 +460,16 @@ local function track_focus(name, win)
 				if target == name then
 					state.focus_index = idx
 					break
+				end
+			end
+
+			if name == "worktree" then
+				if has_staged_worktree_files() then
+					local line = state.current_worktree_line or 1
+					if vim.api.nvim_win_is_valid(win) then
+						line = (vim.api.nvim_win_get_cursor(win) or { line })[1] or line
+					end
+					handle_worktree_cursor(line, { force = true })
 				end
 			end
 
@@ -543,47 +604,6 @@ local function create_sections()
 		filetype = "mylazygit-keymap",
 		title_pos = "center",
 		wrap = true,
-	})
-end
-
-local function handle_worktree_cursor(line, opts)
-	if not state.worktree_map[line] then
-		if opts and opts.force then
-			state.current_file = nil
-			if state.handlers.on_worktree_select then
-				state.handlers.on_worktree_select(nil)
-			else
-				M.reset_preview()
-			end
-		end
-		return
-	end
-	local file = state.worktree_map[line].file
-	if not file then
-		return
-	end
-	if file == state.current_file and not (opts and opts.force) then
-		return
-	end
-	state.current_file = file
-	state.current_worktree_line = line
-	if state.handlers.on_worktree_select then
-		state.handlers.on_worktree_select(file)
-	end
-end
-
-local function attach_worktree_listener(buf, win)
-	local group = ensure_autocmd_group()
-	vim.api.nvim_create_autocmd("CursorMoved", {
-		group = group,
-		buffer = buf,
-		callback = function()
-			if not vim.api.nvim_win_is_valid(win) then
-				return
-			end
-			local line = vim.api.nvim_win_get_cursor(win)[1]
-			handle_worktree_cursor(line, { force = false })
-		end,
 	})
 end
 
