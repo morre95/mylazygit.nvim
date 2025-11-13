@@ -534,7 +534,26 @@ local function unstage_file()
 end
 
 local function unstage_all_files()
-	notify("Not implemented yet", vim.log.levels.ERROR)
+	if not repo_required() then
+		return
+	end
+
+	local has_any_staged = false
+	for _, item in ipairs(state.status) do
+		if has_staged_change(item.staged) then
+			has_any_staged = true
+			break
+		end
+	end
+
+	if not has_any_staged then
+		notify("No staged files to unstage", vim.log.levels.INFO)
+		return
+	end
+
+	run_and_refresh(function()
+		return select(1, git.unstage({ "." }))
+	end, "Unstaged all files (git restore --staged .)")
 end
 
 local function commit_changes()
