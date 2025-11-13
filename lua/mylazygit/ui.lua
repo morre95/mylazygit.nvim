@@ -771,6 +771,10 @@ local function apply_keymaps()
 		wk.add({
 			{ "gs", group = "git stage" },
 		})
+
+		wk.add({
+			{ "gb", group = "git branch" },
+		})
 	end
 end
 

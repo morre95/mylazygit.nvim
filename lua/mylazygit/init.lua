@@ -533,6 +533,10 @@ local function unstage_file()
 	end)
 end
 
+local function unstage_all_files()
+	notify("Not implemented yet", vim.log.levels.ERROR)
+end
+
 local function commit_changes()
 	if not repo_required() then
 		return
@@ -549,7 +553,6 @@ local function commit_changes()
 end
 
 local function stage_all_and_commit()
-	-- notify("Not implemented yet", vim.log.levels.ERROR)
 	if not repo_required() then
 		return
 	end
@@ -1054,6 +1057,7 @@ keymap_mappings = {
 		explain = "This command is running 'git add .' and 'git commit -m <message>'",
 	},
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
+	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage file", explain = "" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
 	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
 	{
@@ -1069,13 +1073,14 @@ keymap_mappings = {
 		explain = "Git push will update the remote repository with the local changes",
 	},
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
+	-- TODO: Add all the branch stuff under 'b' so 'bn' in new branch, 'bs' is switch branch, 'bm' is merge branch and so on
 	{
-		lhs = "n",
+		lhs = "gbn",
 		rhs = switch_new_branch,
 		desc = "New Branch",
 		explain = "git switch -c <branch-name>\nThe `git switch -c` command allows you to create a new branch and switch your working directory to it in one seamless action.",
 	},
-	{ lhs = "b", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
+	{ lhs = "gbs", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
 	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
 	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
 	{ lhs = "d", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
