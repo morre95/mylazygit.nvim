@@ -259,7 +259,7 @@ function M.refresh()
 			highlights = {},
 		},
 		commits = {
-			title = " Commits ", --string.format(" Commits (last %d) ", config.log_limit),
+			title = " Commits ",
 			lines = {},
 			highlights = {},
 		},
@@ -385,7 +385,6 @@ function M.refresh()
 			unstaged,
 			untracked
 		),
-		string.format("Remote %s · Log limit %d", config.remote, config.log_limit),
 	}
 
 	local local_branches = git.branches()
