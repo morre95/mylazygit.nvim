@@ -351,6 +351,83 @@ local function apply_navigation(buf)
 	vim.keymap.set("n", "<S-Tab>", prev_window, { buffer = buf, silent = true, nowait = true })
 end
 
+local function handle_commit_cursor(line, opts)
+	if not state.commit_map[line] then
+		if opts and opts.force and state.handlers.on_commit_select then
+			state.handlers.on_commit_select(nil)
+		end
+		return
+	end
+	local entry = state.commit_map[line]
+	if not entry then
+		return
+	end
+	if entry.hash == state.current_commit_hash and not (opts and opts.force) then
+		return
+	end
+	state.current_commit_hash = entry.hash
+	state.current_commit_line = line
+	if state.handlers.on_commit_select then
+		state.handlers.on_commit_select(entry)
+	end
+end
+
+local function attach_commit_listener(buf, win)
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(win) then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(win)[1]
+			handle_commit_cursor(line, { force = false })
+		end,
+	})
+end
+
+local function handle_worktree_cursor(line, opts)
+	if not state.worktree_map[line] then
+		if opts and opts.force then
+			state.current_file = nil
+			if state.handlers.on_worktree_select then
+				state.handlers.on_worktree_select(nil)
+			else
+				M.reset_preview()
+			end
+		end
+		return
+	end
+	local file = state.worktree_map[line].file
+	if not file then
+		return
+	end
+	if file == state.current_file and not (opts and opts.force) then
+		return
+	end
+	state.current_file = file
+	state.current_worktree_line = line
+	if state.handlers.on_worktree_select then
+		state.handlers.on_worktree_select(file)
+	end
+end
+
+local function attach_worktree_listener(buf, win)
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(win) then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(win)[1]
+			handle_worktree_cursor(line, { force = false })
+		end,
+	})
+end
+
 local function track_focus(name, win)
 	if not win then
 		return
@@ -374,6 +451,22 @@ local function track_focus(name, win)
 					state.focus_index = idx
 					break
 				end
+			end
+
+			if name == "worktree" then
+				local line = state.current_worktree_line or 1
+				if vim.api.nvim_win_is_valid(win) then
+					line = (vim.api.nvim_win_get_cursor(win) or { line })[1] or line
+				end
+				handle_worktree_cursor(line, { force = true })
+			end
+
+			if name == "commits" then
+				local line = state.current_commit_line or 1
+				if vim.api.nvim_win_is_valid(win) then
+					line = (vim.api.nvim_win_get_cursor(win) or { line })[1] or line
+				end
+				handle_commit_cursor(line, { force = true })
 			end
 
 			if name == "diff" and active_bottom_view_name() == "local_branches" then
@@ -499,83 +592,6 @@ local function create_sections()
 		filetype = "mylazygit-keymap",
 		title_pos = "center",
 		wrap = true,
-	})
-end
-
-local function handle_worktree_cursor(line, opts)
-	if not state.worktree_map[line] then
-		if opts and opts.force then
-			state.current_file = nil
-			if state.handlers.on_worktree_select then
-				state.handlers.on_worktree_select(nil)
-			else
-				M.reset_preview()
-			end
-		end
-		return
-	end
-	local file = state.worktree_map[line].file
-	if not file then
-		return
-	end
-	if file == state.current_file and not (opts and opts.force) then
-		return
-	end
-	state.current_file = file
-	state.current_worktree_line = line
-	if state.handlers.on_worktree_select then
-		state.handlers.on_worktree_select(file)
-	end
-end
-
-local function attach_worktree_listener(buf, win)
-	local group = ensure_autocmd_group()
-	vim.api.nvim_create_autocmd("CursorMoved", {
-		group = group,
-		buffer = buf,
-		callback = function()
-			if not vim.api.nvim_win_is_valid(win) then
-				return
-			end
-			local line = vim.api.nvim_win_get_cursor(win)[1]
-			handle_worktree_cursor(line, { force = false })
-		end,
-	})
-end
-
-local function handle_commit_cursor(line, opts)
-	if not state.commit_map[line] then
-		if opts and opts.force and state.handlers.on_commit_select then
-			state.handlers.on_commit_select(nil)
-		end
-		return
-	end
-	local entry = state.commit_map[line]
-	if not entry then
-		return
-	end
-	if entry.hash == state.current_commit_hash and not (opts and opts.force) then
-		return
-	end
-	state.current_commit_hash = entry.hash
-	state.current_commit_line = line
-	if state.handlers.on_commit_select then
-		state.handlers.on_commit_select(entry)
-	end
-end
-
-local function attach_commit_listener(buf, win)
-	local group = ensure_autocmd_group()
-	vim.api.nvim_create_autocmd("CursorMoved", {
-		group = group,
-		buffer = buf,
-		callback = function()
-			if not vim.api.nvim_win_is_valid(win) then
-				return
-			end
-			local line = vim.api.nvim_win_get_cursor(win)[1]
-			handle_commit_cursor(line, { force = false })
-		end,
 	})
 end
 
@@ -857,7 +873,7 @@ function M.render(payload)
 	render_worktree(payload.worktree or {})
 	render_commits(payload.commits or {})
 	render_diff(payload.diff or {})
-	render_preview(payload.preview or {})
+	render_preview(payload.preview)
 	render_keymap(payload.keymap or {})
 end
 

@@ -283,10 +283,6 @@ function M.refresh()
 				},
 			},
 		},
-		preview = {
-			title = " Preview ",
-			lines = { "Select a file from Worktree to see the live diff preview." },
-		},
 		keymap = {
 			lines = {
 				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
@@ -307,7 +303,10 @@ function M.refresh()
 		layout.diff.views.remote_branches.title = " Remote Branches (0) "
 		layout.diff.views.remote_branches.lines = { "Remote branches unavailable outside a repository." }
 		layout.diff.views.diff_preview.lines = { "Diff preview unavailable outside a repository." }
-		layout.preview.lines = { "Git data unavailable until a repository is detected." }
+		layout.preview = {
+			title = " Preview ",
+			lines = { "Git data unavailable until a repository is detected." },
+		}
 		ui.render(layout)
 		return
 	end
@@ -1056,17 +1055,32 @@ keymap_mappings = {
 	},
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
-	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "" },
-	{ lhs = "p", rhs = git_pull, desc = "Git pull", explain = "" },
-	{ lhs = "P", rhs = git_push, desc = "Git push", explain = "" },
-	{ lhs = "f", rhs = git_fetch, desc = "Git fetch", explain = "" },
-	{ lhs = "n", rhs = switch_new_branch, desc = "Git switch -c", explain = "" },
-	{ lhs = "b", rhs = switch_branch, desc = "Git switch branch", explain = "" },
-	{ lhs = "R", rhs = remote_add, desc = "Git remote add", explain = "" },
-	{ lhs = "U", rhs = remote_set_url, desc = "Git remote set-url", explain = "" },
-	{ lhs = "d", rhs = delete_branch_safe, desc = "Git branch -d", explain = "" },
-	{ lhs = "D", rhs = delete_branch_force, desc = "Git branch -D", explain = "" },
-	{ lhs = "m", rhs = merge_branch, desc = "Git merge branch", explain = "" },
+	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
+	{
+		lhs = "p",
+		rhs = git_pull,
+		desc = "Pull",
+		explain = "Git pull will incorporates changes from a remote repository into the current branch.",
+	},
+	{
+		lhs = "P",
+		rhs = git_push,
+		desc = "Push",
+		explain = "Git push will update the remote repository with the local changes",
+	},
+	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
+	{
+		lhs = "n",
+		rhs = switch_new_branch,
+		desc = "New Branch",
+		explain = "git switch -c <branch-name>\nThe `git switch -c` command allows you to create a new branch and switch your working directory to it in one seamless action.",
+	},
+	{ lhs = "b", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
+	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
+	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
+	{ lhs = "d", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
+	{ lhs = "D", rhs = delete_branch_force, desc = "Delete branch force", explain = "git branch -D <branch-name>" },
+	{ lhs = "m", rhs = merge_branch, desc = "Merge branch", explain = "git merge <branch-name>" },
 	{
 		lhs = "w",
 		rhs = merge_workflow,
