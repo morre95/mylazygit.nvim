@@ -749,6 +749,13 @@ local function apply_keymaps()
 			end
 		end
 	end
+
+	local ok, wk = pcall(require, "which-key")
+	if ok then
+		wk.add({
+			{ "gs", group = "git stage" },
+		})
+	end
 end
 
 function M.is_open()

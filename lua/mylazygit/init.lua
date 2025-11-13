@@ -549,6 +549,16 @@ local function commit_changes()
 	end)
 end
 
+local function stage_all_and_commit()
+	-- notify("Not implemented yet", vim.log.levels.ERROR)
+	if not repo_required() then
+		return
+	end
+
+	stage_all()
+	commit_changes()
+end
+
 local function git_init()
 	run_and_refresh(function()
 		return select(1, git.init())
@@ -1031,14 +1041,20 @@ keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
-	{ lhs = "s", rhs = stage_file, desc = "Stage file", explain = "" },
+	{ lhs = "gsf", rhs = stage_file, desc = "Stage file", explain = "Stage file by file" },
 	{
-		lhs = "a",
+		lhs = "gsa",
 		rhs = stage_all,
-		desc = "Stage all (git add .)",
+		desc = "Stage all files",
 		explain = "Stage all files at once. Same as 'git add .'",
 	},
-	{ lhs = "u", rhs = unstage_file, desc = "Unstage file", explain = "" },
+	{
+		lhs = "gsc",
+		rhs = stage_all_and_commit,
+		desc = "Stage all and commit",
+		explain = "This command is running 'git add .' and 'git commit -m <message>'",
+	},
+	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
 	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "" },
 	{ lhs = "p", rhs = git_pull, desc = "Git pull", explain = "" },
