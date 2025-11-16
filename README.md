@@ -20,11 +20,13 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
 return {
   'morre95/mylazygit.nvim',
   config = function()
+    local branch = vim.fn.systemlist("git branch --show-current")[1] or "main"
+    local remote_name = vim.fn.systemlist("git remote -v | cut -f1 | uniq")[1] or "origin"
     require('mylazygit').setup({
-      remote = 'origin',        -- change if you use something else
-      branch_fallback = 'main', -- used when HEAD is detached
+      remote = remote_name,        -- change if you use something else
+      branch_fallback = branch, -- used when HEAD is detached
       merge_workflow = {
-        main_branch = 'main',   -- base branch for the workflow helper
+        main_branch = branch,   -- base branch for the workflow helper
         rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
       },
       log_limit = 5,            -- number of commits shown in the panel
