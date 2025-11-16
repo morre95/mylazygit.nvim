@@ -63,6 +63,10 @@ function M.pull(remote, branch)
 	return system({ "pull", remote, branch })
 end
 
+function M.pull_rebase(remote, branch)
+	return system({ "pull", "--rebase", remote, branch })
+end
+
 function M.push(remote, branch)
 	return system({ "push", remote, branch })
 end

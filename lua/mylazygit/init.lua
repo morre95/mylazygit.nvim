@@ -570,6 +570,17 @@ local function commit_changes()
 	end)
 end
 
+local function pull_rebase_main()
+	if not repo_required() then
+		return
+	end
+
+	local branch = git.current_branch() or config.branch_fallback
+	run_and_refresh(function()
+		return select(1, git.pull_rebase(config.remote, branch))
+	end, string.format("Pulled and rebase %s/%s", config.remote, branch))
+end
+
 local function stage_all_and_commit()
 	if not repo_required() then
 		return
@@ -577,6 +588,7 @@ local function stage_all_and_commit()
 
 	stage_all()
 	commit_changes()
+	pull_rebase_main()
 end
 
 local function git_init()
