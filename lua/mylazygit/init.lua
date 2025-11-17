@@ -588,6 +588,7 @@ local function stage_all_and_commit()
 
 	stage_all()
 	commit_changes()
+	-- FIXME: Det varkar som git pull --rebase körs async för det ploppar upp ett meddelande om att det inte är okej
 	pull_rebase_main()
 end
 
