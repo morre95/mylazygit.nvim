@@ -570,7 +570,7 @@ local function commit_changes()
 	end)
 end
 
-local function pull_rebase_main()
+local function pull_rebase()
 	if not repo_required() then
 		return
 	end
@@ -586,10 +586,37 @@ local function stage_all_and_commit()
 		return
 	end
 
-	stage_all()
-	commit_changes()
-	-- FIXME: Det varkar som git pull --rebase körs async för det ploppar upp ett meddelande om att det inte är okej
-	pull_rebase_main()
+	-- First, stage all files
+	local stage_ok = select(1, git.stage({ "." }))
+	if not stage_ok then
+		return
+	end
+	notify("Staged all changes (git add .)")
+	M.refresh()
+
+	-- Then, prompt for commit message and chain pull_rebase after commit
+	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
+		if not msg or vim.trim(msg) == "" then
+			return
+		end
+
+		-- Commit the changes
+		local commit_ok = select(1, git.commit(msg))
+		if not commit_ok then
+			M.refresh()
+			return
+		end
+		notify("Commit created")
+		M.refresh()
+
+		-- Only after successful commit, run pull rebase
+		local branch = git.current_branch() or config.branch_fallback
+		local pull_ok = select(1, git.pull_rebase(config.remote, branch))
+		if pull_ok then
+			notify(string.format("Pulled and rebase %s/%s", config.remote, branch))
+		end
+		M.refresh()
+	end)
 end
 
 local function git_init()

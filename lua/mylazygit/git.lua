@@ -186,6 +186,7 @@ function M.merge_workflow(opts)
 
 	return true, { string.format("Merge workflow completed for %s -> %s", feature_branch, main_branch) }
 end
+
 function M.switch(branch)
 	return system({ "switch", branch })
 end
