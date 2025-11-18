@@ -597,6 +597,36 @@ local function stage_all_and_commit()
 		end
 		notify("Commit created")
 		M.refresh()
+	end)
+end
+
+local function stage_all_and_commit_and_pull()
+	if not repo_required() then
+		return
+	end
+
+	-- First, stage all files
+	local stage_ok = select(1, git.stage({ "." }))
+	if not stage_ok then
+		return
+	end
+	notify("Staged all changes (git add .)")
+	M.refresh()
+
+	-- Then, prompt for commit message and chain pull_rebase after commit
+	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
+		if not msg or vim.trim(msg) == "" then
+			return
+		end
+
+		-- Commit the changes
+		local commit_ok = select(1, git.commit(msg))
+		if not commit_ok then
+			M.refresh()
+			return
+		end
+		notify("Commit created")
+		M.refresh()
 
 		-- Only after successful commit, run pull rebase
 		local branch = git.current_branch() or config.branch_fallback
@@ -1103,6 +1133,13 @@ keymap_mappings = {
 		desc = "Stage all and commit",
 		explain = "This command is running 'git add .' and 'git commit -m <message>'",
 	},
+	{
+		lhs = "gsC",
+		rhs = stage_all_and_commit_and_pull,
+		desc = "Stage all and commit and pull",
+		explain = "This command is running 'git add .' and 'git commit -m <message>' and 'git pull --rebase'",
+	},
+
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage file", explain = "" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
