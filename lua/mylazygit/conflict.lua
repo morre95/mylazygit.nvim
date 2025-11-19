@@ -286,7 +286,7 @@ local function render()
 	local info_lines = {
 		string.format("Conflict %d/%d %s � File: %s", state.current_conflict_idx, total, status, state.file_path),
 		string.format(
-			"Resolved: %d/%d � [h]ours [l]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [s]ave [q]uit",
+			"Resolved: %d/%d � [l]ours [h]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [s]ave [q]uit",
 			resolved_count,
 			total
 		),
@@ -471,8 +471,8 @@ local function setup_keymaps()
 	for _, buf in ipairs(bufs) do
 		vim.keymap.set("n", "j", next_conflict, { buffer = buf, silent = true, desc = "Next conflict" })
 		vim.keymap.set("n", "k", prev_conflict, { buffer = buf, silent = true, desc = "Previous conflict" })
-		vim.keymap.set("n", "h", accept_ours, { buffer = buf, silent = true, desc = "Accept local (ours)" })
-		vim.keymap.set("n", "l", accept_theirs, { buffer = buf, silent = true, desc = "Accept incoming (theirs)" })
+		vim.keymap.set("n", "l", accept_ours, { buffer = buf, silent = true, desc = "Accept local (ours)" })
+		vim.keymap.set("n", "h", accept_theirs, { buffer = buf, silent = true, desc = "Accept incoming (theirs)" })
 		vim.keymap.set("n", "a", accept_all_ours, { buffer = buf, silent = true, desc = "Accept all local" })
 		vim.keymap.set("n", "A", accept_all_theirs, { buffer = buf, silent = true, desc = "Accept all incoming" })
 		vim.keymap.set("n", "s", save_and_close, { buffer = buf, silent = true, desc = "Save and close" })
