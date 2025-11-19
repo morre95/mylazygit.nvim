@@ -692,7 +692,11 @@ local function check_conflicts()
 
 	if result.has_conflicts then
 		notify(
-			string.format("⚠️  Conflicts detected when merging %s/%s into current branch", result.remote, result.branch),
+			string.format(
+				"⚠️  Conflicts detected when merging %s/%s into current branch",
+				result.remote,
+				result.branch
+			),
 			vim.log.levels.WARN
 		)
 	else
@@ -728,6 +732,8 @@ local function resolve_conflicts()
 			end
 		end)
 	end
+
+	M.refresh()
 end
 
 local function switch_new_branch()
@@ -1226,7 +1232,6 @@ keymap_mappings = {
 		desc = "Resolve conflicts",
 		explain = "Opens the 3-way conflict resolver showing local changes (right), incoming changes (left), and the result (middle). Navigate with j/k, accept changes with h (ours) or l (theirs), accept all with a/A, and save with s.",
 	},
-	-- TODO: Add all the branch stuff under 'b' so 'bn' in new branch, 'bs' is switch branch, 'bm' is merge branch and so on
 	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
 	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
 	{
