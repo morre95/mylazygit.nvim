@@ -1,6 +1,7 @@
 local git = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
+local conflict = require("mylazygit.conflict")
 
 local M = {}
 
@@ -285,7 +286,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [C]heck-conflicts [m]erge [M]rebase [i]nit [q]uit",
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -699,6 +700,33 @@ local function check_conflicts()
 			string.format("✓ No conflicts detected. Safe to merge %s/%s", result.remote, result.branch),
 			vim.log.levels.INFO
 		)
+	end
+end
+
+local function resolve_conflicts()
+	if not repo_required() then
+		return
+	end
+
+	local conflicted_files = conflict.get_conflicted_files()
+
+	if vim.tbl_isempty(conflicted_files) then
+		notify("No files with conflicts found", vim.log.levels.INFO)
+		return
+	end
+
+	if #conflicted_files == 1 then
+		-- Only one file, open it directly
+		conflict.open(conflicted_files[1])
+	else
+		-- Multiple files, let user choose
+		vim.ui.select(conflicted_files, {
+			prompt = string.format("Select file to resolve (%d conflicts)", #conflicted_files),
+		}, function(choice)
+			if choice then
+				conflict.open(choice)
+			end
+		end)
 	end
 end
 
@@ -1191,6 +1219,12 @@ keymap_mappings = {
 		rhs = check_conflicts,
 		desc = "Check conflicts",
 		explain = "Runs 'git fetch' and then 'git merge-tree' to check for conflicts before merging. This is a safe way to preview potential conflicts without actually performing a merge.",
+	},
+	{
+		lhs = "X",
+		rhs = resolve_conflicts,
+		desc = "Resolve conflicts",
+		explain = "Opens the 3-way conflict resolver showing local changes (right), incoming changes (left), and the result (middle). Navigate with j/k, accept changes with h (ours) or l (theirs), accept all with a/A, and save with s.",
 	},
 	-- TODO: Add all the branch stuff under 'b' so 'bn' in new branch, 'bs' is switch branch, 'bm' is merge branch and so on
 	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },

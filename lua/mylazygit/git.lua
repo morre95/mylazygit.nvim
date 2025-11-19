@@ -418,7 +418,7 @@ function M.check_conflicts(remote, branch)
 	local merge_base = trim(base_output[1])
 
 	-- Run merge-tree to check for conflicts
-	local merge_tree_ok, merge_tree_output = system({
+	local _, merge_tree_output = system({
 		"merge-tree",
 		merge_base,
 		"HEAD",
