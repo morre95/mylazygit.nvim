@@ -655,6 +655,17 @@ local function git_pull()
 	end, string.format("Pulled %s/%s", config.remote, branch))
 end
 
+local function git_pull_rabase()
+	if not repo_required() then
+		return
+	end
+
+	local branch = git.current_branch() or config.branch_fallback
+	run_and_refresh(function()
+		return select(1, git.pull_rebase(config.remote, branch))
+	end, string.format("Pull and rebase from %s/%s", config.remote, branch))
+end
+
 local function git_push()
 	if not repo_required() then
 		return
@@ -1205,6 +1216,7 @@ keymap_mappings = {
 
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage file", explain = "" },
+	{ lhs = "gsp", rhs = git_pull_rabase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
 	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
 	{
