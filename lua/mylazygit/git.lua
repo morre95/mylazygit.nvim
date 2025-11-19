@@ -400,4 +400,47 @@ function M.parse_status()
 	return status
 end
 
+function M.check_conflicts(remote, branch)
+	remote = remote or "origin"
+	branch = branch or "main"
+
+	-- First, fetch the latest changes
+	local fetch_ok, fetch_output = system({ "fetch", remote })
+	if not fetch_ok then
+		return false, fetch_output
+	end
+
+	-- Get the merge base
+	local base_ok, base_output = system({ "merge-base", "HEAD", string.format("%s/%s", remote, branch) }, { silent = true })
+	if not base_ok or not base_output[1] then
+		return false, { "Could not determine merge base" }
+	end
+	local merge_base = trim(base_output[1])
+
+	-- Run merge-tree to check for conflicts
+	local merge_tree_ok, merge_tree_output = system({
+		"merge-tree",
+		merge_base,
+		"HEAD",
+		string.format("%s/%s", remote, branch)
+	}, { silent = true })
+
+	-- Check if there are conflict markers in the output
+	-- Markers can appear with diff prefixes like "+<<<<<<<" or directly as "<<<<<<<"
+	local has_conflicts = false
+	for _, line in ipairs(merge_tree_output) do
+		if line:match("^[+%-]?<<<<<<<") or line:match("^[+%-]?=======") or line:match("^[+%-]?>>>>>>>") then
+			has_conflicts = true
+			break
+		end
+	end
+
+	return true, {
+		has_conflicts = has_conflicts,
+		output = merge_tree_output,
+		remote = remote,
+		branch = branch,
+	}
+end
+
 return M

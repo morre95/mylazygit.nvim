@@ -285,7 +285,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [m]erge [M]rebase [i]nit [q]uit",
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [C]heck-conflicts [m]erge [M]rebase [i]nit [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -671,6 +671,35 @@ local function git_fetch()
 	run_and_refresh(function()
 		return select(1, git.fetch(config.remote))
 	end, string.format("Fetched %s", config.remote))
+end
+
+local function check_conflicts()
+	if not repo_required() then
+		return
+	end
+
+	local branch = git.current_branch() or config.branch_fallback
+	notify("Checking for conflicts...", vim.log.levels.INFO)
+
+	local ok, result = git.check_conflicts(config.remote, branch)
+	if not ok then
+		notify(table.concat(result, "\n"), vim.log.levels.ERROR)
+		return
+	end
+
+	M.refresh()
+
+	if result.has_conflicts then
+		notify(
+			string.format("⚠️  Conflicts detected when merging %s/%s into current branch", result.remote, result.branch),
+			vim.log.levels.WARN
+		)
+	else
+		notify(
+			string.format("✓ No conflicts detected. Safe to merge %s/%s", result.remote, result.branch),
+			vim.log.levels.INFO
+		)
+	end
 end
 
 local function switch_new_branch()
@@ -1157,6 +1186,12 @@ keymap_mappings = {
 		explain = "Git push will update the remote repository with the local changes",
 	},
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
+	{
+		lhs = "C",
+		rhs = check_conflicts,
+		desc = "Check conflicts",
+		explain = "Runs 'git fetch' and then 'git merge-tree' to check for conflicts before merging. This is a safe way to preview potential conflicts without actually performing a merge.",
+	},
 	-- TODO: Add all the branch stuff under 'b' so 'bn' in new branch, 'bs' is switch branch, 'bm' is merge branch and so on
 	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
 	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
