@@ -219,38 +219,51 @@ local function render()
 		return
 	end
 
-	-- Update "ours" (local) buffer
+	-- Update "ours" (local) buffer - show current conflict only
 	vim.api.nvim_set_option_value("modifiable", true, { buf = state.buffers.ours })
 	vim.api.nvim_buf_set_lines(state.buffers.ours, 0, -1, false, current.ours)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = state.buffers.ours })
 
-	-- Update "theirs" (incoming) buffer
+	-- Update "theirs" (incoming) buffer - show current conflict only
 	vim.api.nvim_set_option_value("modifiable", true, { buf = state.buffers.theirs })
 	vim.api.nvim_buf_set_lines(state.buffers.theirs, 0, -1, false, current.theirs)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = state.buffers.theirs })
 
-	-- Update result buffer
-	local result_content = {}
-	if current.resolved then
-		if current.resolution == "ours" then
-			result_content = current.ours
-		elseif current.resolution == "theirs" then
-			result_content = current.theirs
-		elseif type(current.resolution) == "table" then
-			result_content = current.resolution
-		end
-	else
-		-- Show both with markers if unresolved
-		table.insert(result_content, "<<<<<<< HEAD (Local)")
-		vim.list_extend(result_content, current.ours)
-		table.insert(result_content, "=======")
-		vim.list_extend(result_content, current.theirs)
-		table.insert(result_content, ">>>>>>> MERGE_HEAD (Incoming)")
-	end
+	-- Update result buffer - show ENTIRE file with live preview
+	local result_content = build_result()
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = state.buffers.result })
 	vim.api.nvim_buf_set_lines(state.buffers.result, 0, -1, false, result_content)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = state.buffers.result })
+
+	-- Calculate the line number where the current conflict appears in the result
+	local current_line = 1
+	for i, chunk in ipairs(state.file_chunks) do
+		if chunk.type == "conflict" and chunk.index == state.current_conflict_idx then
+			-- Found the current conflict, scroll to it
+			break
+		elseif chunk.type == "text" and type(chunk.lines) == "table" then
+			current_line = current_line + #chunk.lines
+		elseif chunk.type == "conflict" then
+			-- Add lines from previous conflicts
+			local prev_conflict = state.conflicts[chunk.index]
+			if prev_conflict.resolved then
+				if prev_conflict.resolution == "ours" then
+					current_line = current_line + #prev_conflict.ours
+				elseif prev_conflict.resolution == "theirs" then
+					current_line = current_line + #prev_conflict.theirs
+				end
+			else
+				-- Unresolved: markers + ours + separator + theirs + end marker
+				current_line = current_line + 1 + #prev_conflict.ours + 1 + #prev_conflict.theirs + 1
+			end
+		end
+	end
+
+	-- Scroll the result window to show the current conflict
+	if vim.api.nvim_win_is_valid(state.windows.result) then
+		vim.api.nvim_win_set_cursor(state.windows.result, { current_line, 0 })
+	end
 
 	-- Update info panel
 	local total = #state.conflicts
