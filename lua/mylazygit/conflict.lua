@@ -85,11 +85,13 @@ end
 local function build_result()
 	local result = {}
 
-	if type(state.file_chunks) ~= "table" then
+	local file_chunks = state.file_chunks
+	if type(file_chunks) ~= "table" then
 		return result
 	end
+	---@cast file_chunks table
 
-	for _, chunk in ipairs(state.file_chunks) do
+	for _, chunk in ipairs(file_chunks) do
 		if chunk.type == "text" then
 			-- Regular text, just add it
 			if type(chunk.lines) == "table" then
@@ -238,7 +240,13 @@ local function render()
 
 	-- Calculate the line number where the current conflict appears in the result
 	local current_line = 1
-	for i, chunk in ipairs(state.file_chunks) do
+	local file_chunks = state.file_chunks
+	if type(file_chunks) ~= "table" then
+		return
+	end
+	---@cast file_chunks table
+
+	for _, chunk in ipairs(file_chunks) do
 		if chunk.type == "conflict" and chunk.index == state.current_conflict_idx then
 			-- Found the current conflict, scroll to it
 			break
@@ -277,7 +285,11 @@ local function render()
 	local status = current.resolved and ("[" .. current.resolution .. "]") or "[unresolved]"
 	local info_lines = {
 		string.format("Conflict %d/%d %s � File: %s", state.current_conflict_idx, total, status, state.file_path),
-		string.format("Resolved: %d/%d � [h]ours [l]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [s]ave [q]uit", resolved_count, total),
+		string.format(
+			"Resolved: %d/%d � [h]ours [l]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [s]ave [q]uit",
+			resolved_count,
+			total
+		),
 	}
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = state.buffers.info })
@@ -367,11 +379,8 @@ local function save_and_close()
 	end
 
 	if unresolved > 0 then
-		local choice = vim.fn.confirm(
-			string.format("%d conflict(s) unresolved. Save anyway?", unresolved),
-			"&Yes\n&No",
-			2
-		)
+		local choice =
+			vim.fn.confirm(string.format("%d conflict(s) unresolved. Save anyway?", unresolved), "&Yes\n&No", 2)
 		if choice ~= 1 then
 			return
 		end
@@ -407,11 +416,7 @@ local function save_and_close()
 	M.close()
 
 	if in_rebase then
-		local choice = vim.fn.confirm(
-			"File resolved and staged. Continue rebase?",
-			"&Continue\n&Stop here",
-			1
-		)
+		local choice = vim.fn.confirm("File resolved and staged. Continue rebase?", "&Continue\n&Stop here", 1)
 		if choice == 1 then
 			vim.notify("Continuing rebase...", vim.log.levels.INFO)
 			local ok, output = pcall(vim.fn.systemlist, { "git", "rebase", "--continue" })
@@ -422,11 +427,7 @@ local function save_and_close()
 			end
 		end
 	elseif in_merge then
-		local choice = vim.fn.confirm(
-			"File resolved and staged. Commit the merge?",
-			"&Commit\n&Stop here",
-			1
-		)
+		local choice = vim.fn.confirm("File resolved and staged. Commit the merge?", "&Commit\n&Stop here", 1)
 		if choice == 1 then
 			vim.notify("Committing merge...", vim.log.levels.INFO)
 			local ok, output = pcall(vim.fn.systemlist, { "git", "commit", "--no-edit" })
