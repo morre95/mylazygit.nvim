@@ -41,7 +41,7 @@ return {
 
 ```lua
 return {
-  dir = '~/lua/MyLazyGit',  -- absolute path to your clone
+  dir = '~/lua/mylazygit.nvim',  -- absolute path to your clone
   name = 'mylazygit',
   config = function()
     require('mylazygit').setup()
