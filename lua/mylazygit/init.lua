@@ -14,7 +14,7 @@ local config = {
 	},
 	log_limit = 5,
 	max_commit_lines = 100,
-	max_branch_lines = 100,
+	max_branch_lines = 10,
 	diff_args = { "--stat" },
 	diff_max_lines = 80,
 }
@@ -1184,6 +1184,7 @@ keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
+	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
 	{ lhs = "gsf", rhs = stage_file, desc = "Stage file", explain = "Stage file by file" },
 	{
 		lhs = "gsa",
@@ -1195,20 +1196,20 @@ keymap_mappings = {
 		lhs = "gsc",
 		rhs = stage_all_and_commit,
 		desc = "Stage all and commit",
-		explain = "This command is running 'git add .' and 'git commit -m <message>'",
+		explain = "This command is running 'git add .' → 'git commit -m <message>'",
 	},
 	{
 		lhs = "gsC",
 		rhs = stage_all_and_commit_and_pull,
 		desc = "Stage all and commit and pull",
-		explain = "This command is running 'git add .' and 'git commit -m <message>' and 'git pull --rebase' end then 'git push'",
+		explain = "This command is running 'git add .' → 'git commit -m <message>' → 'git pull --rebase' → 'git push'",
 	},
 
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage file", explain = "" },
 	{ lhs = "gsp", rhs = git_pull_rabase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
-	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
+
 	{
 		lhs = "p",
 		rhs = git_pull,
@@ -1221,6 +1222,7 @@ keymap_mappings = {
 		desc = "Push",
 		explain = "Git push will update the remote repository with the local changes",
 	},
+
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
 	{
 		lhs = "C",
@@ -1250,7 +1252,7 @@ keymap_mappings = {
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Checkout main, pull, rebase branch, and merge back",
+		explain = "Run the merge workflow (checkout main → pull → checkout branch → pull → rebase → merge)",
 	},
 	{ lhs = "gbr", rhs = rebase_branch, desc = "Git rebase branch", explain = "" },
 	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
