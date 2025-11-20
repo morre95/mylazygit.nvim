@@ -29,7 +29,9 @@ return {
         main_branch = branch,   -- base branch for the workflow helper
         rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
       },
-      log_limit = 5,            -- number of commits shown in the panel
+      log_limit = 5,            -- number of log messages shown in the panel
+      max_commit_lines = 100,   -- number of commits shown in the panel
+	    max_branch_lines = 10,    -- number of branches shown in the panel
       diff_args = { '--stat' }, -- passed to `git diff`
       diff_max_lines = 80,      -- trim diff panel for readability
     })
