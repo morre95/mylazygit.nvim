@@ -636,6 +636,7 @@ local function stage_all_and_commit_and_pull()
 			notify(string.format("Pulled and rebase %s/%s", config.remote, branch))
 		end
 
+		-- TBD: Try this confirmation thingy and se if it is usefull
 		local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Pushing was cancelled", vim.log.levels.INFO)
