@@ -637,11 +637,11 @@ local function stage_all_and_commit_and_pull()
 		end
 
 		-- TBD: Try this confirmation thingy and se if it is usefull
-		local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
-		if confirmation ~= 1 then
-			notify("Pushing was cancelled", vim.log.levels.INFO)
-			return
-		end
+		-- local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
+		-- if confirmation ~= 1 then
+		-- 	notify("Pushing was cancelled", vim.log.levels.INFO)
+		-- 	return
+		-- end
 
 		local pushed_ok = select(1, git.push(config.remote, branch))
 		if pushed_ok then
