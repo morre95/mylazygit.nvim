@@ -514,19 +514,34 @@ local function stage_file()
 end
 
 local function stage_all()
-	if not repo_required() then
-		return
-	end
-	run_and_refresh(function()
-		return select(1, git.stage({ "." }))
-	end, "Staged all changes (git add .)")
+        if not repo_required() then
+                return
+        end
+        run_and_refresh(function()
+                return select(1, git.stage({ "." }))
+        end, "Staged all changes (git add .)")
+end
+
+local function restore_file()
+        if not repo_required() then
+                return
+        end
+
+        choose_files("Restore files", function(item)
+                return has_unstaged_change(item.unstaged)
+                        and not has_untracked_change(item.staged, item.unstaged)
+        end, function(files)
+                return select(1, git.restore(files))
+        end, function(selection)
+                return string.format("Restored %d file(s)", #selection)
+        end)
 end
 
 local function unstage_file()
-	if not repo_required() then
-		return
-	end
-	choose_files("Unstage file", nil, function(item)
+        if not repo_required() then
+                return
+        end
+        choose_files("Unstage file", nil, function(item)
 		-- return item.staged ~= " "
 		return select(1, git.unstage(item))
 	end, function(selection)
@@ -1189,13 +1204,19 @@ end
 keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
-	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
-	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
-	{ lhs = "gsf", rhs = stage_file, desc = "Stage file", explain = "Stage file by file" },
-	{
-		lhs = "gsa",
-		rhs = stage_all,
-		desc = "Stage all files",
+        { lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
+        { lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
+        { lhs = "gsf", rhs = stage_file, desc = "Stage file", explain = "Stage file by file" },
+        {
+                lhs = "gsr",
+                rhs = restore_file,
+                desc = "Restore file",
+                explain = "Restore tracked files with unstaged changes (git restore -- <file>)",
+        },
+        {
+                lhs = "gsa",
+                rhs = stage_all,
+                desc = "Stage all files",
 		explain = "Stage all files at once. Same as 'git add .'",
 	},
 	{
