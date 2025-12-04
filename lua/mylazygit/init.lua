@@ -526,10 +526,11 @@ local function unstage_file()
 	if not repo_required() then
 		return
 	end
-	choose_file("Unstage file", function(item)
-		return item.staged ~= " "
-	end, function(file)
-		return select(1, git.unstage(file))
+	choose_files("Unstage file", nil, function(item)
+		-- return item.staged ~= " "
+		return select(1, git.unstage(item))
+	end, function(selection)
+		return string.format("Staged %d file(s)", #selection)
 	end)
 end
 
@@ -787,20 +788,20 @@ local function switch_branch()
 		return
 	end
 
-        vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
-                if not choice then
-                        return
-                end
+	vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
+		if not choice then
+			return
+		end
 
-                if not git.has_local_branch(choice) then
-                        notify(string.format("Branch %s not found", choice), vim.log.levels.WARN)
-                        return
-                end
+		if not git.has_local_branch(choice) then
+			notify(string.format("Branch %s not found", choice), vim.log.levels.WARN)
+			return
+		end
 
-                run_and_refresh(function()
-                        return select(1, git.switch(choice))
-                end, string.format("Switched to %s", choice))
-        end)
+		run_and_refresh(function()
+			return select(1, git.switch(choice))
+		end, string.format("Switched to %s", choice))
+	end)
 end
 
 local function remote_add()
@@ -1211,7 +1212,7 @@ keymap_mappings = {
 	},
 
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
-	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage file", explain = "" },
+	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage all files", explain = "" },
 	{ lhs = "gsp", rhs = git_pull_rabase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
 
