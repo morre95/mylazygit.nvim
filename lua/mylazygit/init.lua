@@ -793,9 +793,9 @@ local function switch_new_branch()
 end
 
 local function switch_branch()
-	if not repo_required() then
-		return
-	end
+        if not repo_required() then
+                return
+        end
 
 	local branches = git.branches()
 	if vim.tbl_isempty(branches) then
@@ -813,10 +813,32 @@ local function switch_branch()
 			return
 		end
 
-		run_and_refresh(function()
-			return select(1, git.switch(choice))
-		end, string.format("Switched to %s", choice))
-	end)
+                run_and_refresh(function()
+                        return select(1, git.switch(choice))
+                end, string.format("Switched to %s", choice))
+        end)
+end
+
+local function switch_remote_branch()
+        if not repo_required() then
+                return
+        end
+
+        local branches = git.remote_branches()
+        if vim.tbl_isempty(branches) then
+                notify("No remote branches found", vim.log.levels.WARN)
+                return
+        end
+
+        vim.ui.select(branches, { prompt = "Switch to remote branch" }, function(choice)
+                if not choice then
+                        return
+                end
+
+                run_and_refresh(function()
+                        return select(1, git.switch_remote(choice))
+                end, string.format("Switched to %s", choice))
+        end)
 end
 
 local function remote_add()
@@ -1264,17 +1286,23 @@ keymap_mappings = {
 		explain = "Opens the 3-way conflict resolver showing local changes (right), incoming changes (left), and the result (middle). Navigate with j/k, accept changes with h (ours) or l (theirs), accept all with a/A, and save with s.",
 	},
 	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
-	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
-	{
-		lhs = "gbn",
-		rhs = switch_new_branch,
-		desc = "New Branch",
-		explain = "git switch -c <branch-name>\nThe `git switch -c` command allows you to create a new branch and switch your working directory to it in one seamless action.",
-	},
-	{ lhs = "gbs", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
-	{ lhs = "gbd", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
-	{ lhs = "gbD", rhs = delete_branch_force, desc = "Delete branch force", explain = "git branch -D <branch-name>" },
-	{ lhs = "gbm", rhs = merge_branch, desc = "Merge branch", explain = "git merge <branch-name>" },
+        { lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
+        {
+                lhs = "gbn",
+                rhs = switch_new_branch,
+                desc = "New Branch",
+                explain = "git switch -c <branch-name>\nThe `git switch -c` command allows you to create a new branch and switch your working directory to it in one seamless action.",
+        },
+        { lhs = "gbs", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
+        {
+                lhs = "gbR",
+                rhs = switch_remote_branch,
+                desc = "Switch remote branch",
+                explain = "Create and track a remote branch locally",
+        },
+        { lhs = "gbd", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
+        { lhs = "gbD", rhs = delete_branch_force, desc = "Delete branch force", explain = "git branch -D <branch-name>" },
+        { lhs = "gbm", rhs = merge_branch, desc = "Merge branch", explain = "git merge <branch-name>" },
 	{
 		lhs = "gbw",
 		rhs = merge_workflow,

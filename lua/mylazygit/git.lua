@@ -193,11 +193,28 @@ function M.merge_workflow(opts)
 end
 
 function M.switch(branch)
-	return system({ "switch", branch })
+        return system({ "switch", branch })
 end
 
 function M.switch_create(branch)
-	return system({ "switch", "-c", branch })
+        return system({ "switch", "-c", branch })
+end
+
+function M.switch_remote(remote_branch)
+        if not remote_branch or remote_branch == "" then
+                return false, { "Remote branch required" }
+        end
+
+        local remote, branch = remote_branch:match("^([^/]+)/(.+)$")
+        if not remote or remote == "" or not branch or branch == "" then
+                return false, { string.format("Invalid remote branch: %s", remote_branch) }
+        end
+
+        if M.has_local_branch(branch) then
+                return M.switch(branch)
+        end
+
+        return system({ "switch", "-c", branch, "--track", remote_branch })
 end
 
 function M.branches()
