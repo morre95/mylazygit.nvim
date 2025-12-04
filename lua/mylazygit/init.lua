@@ -826,7 +826,7 @@ local function remote_set_url()
 	if not repo_required() then
 		return
 	end
-	local remote_url = git.remote_get_url()
+	local remote_url = git.remote_get_url(config.remote)
 	if not remote_url then
 		remote_url = ""
 	end
