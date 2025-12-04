@@ -279,6 +279,11 @@ function M.delete_branch(name, force)
 		return false, { "Branch name required" }
 	end
 
+	local remote, branch = name:match("^([^/]+)/(.+)$")
+	if remote and branch then
+		return system({ "push", remote, "--delete", branch })
+	end
+
 	local flag = force and "-D" or "-d"
 	return system({ "branch", flag, name })
 end
