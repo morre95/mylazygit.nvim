@@ -66,6 +66,7 @@ Key | Action
 `r` | Refresh the status view
 `s` | Stage files (multi-select; keep choosing until you press Esc)
 `a` | Stage everything (`git add .`)
+`gsr` | Restore tracked files with unstaged changes (`git restore -- <file>`)
 `u` | Unstage a file
 `c` | Commit staged changes (prompts for message)
 `p` | Pull from the configured remote/branch

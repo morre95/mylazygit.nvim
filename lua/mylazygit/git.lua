@@ -47,12 +47,17 @@ function M.stage(paths)
 end
 
 function M.unstage(paths)
-	paths = type(paths) == "table" and paths or { paths }
-	return system(vim.list_extend({ "restore", "--staged" }, paths))
+        paths = type(paths) == "table" and paths or { paths }
+        return system(vim.list_extend({ "restore", "--staged" }, paths))
+end
+
+function M.restore(paths)
+        paths = type(paths) == "table" and paths or { paths }
+        return system(vim.list_extend({ "restore", "--" }, paths))
 end
 
 function M.commit(message)
-	return system({ "commit", "-m", message })
+        return system({ "commit", "-m", message })
 end
 
 function M.init()
