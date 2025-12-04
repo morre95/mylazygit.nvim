@@ -787,15 +787,20 @@ local function switch_branch()
 		return
 	end
 
-	vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
-		if not choice then
-			return
-		end
+        vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
+                if not choice then
+                        return
+                end
 
-		run_and_refresh(function()
-			return select(1, git.switch(choice))
-		end, string.format("Switched to %s", choice))
-	end)
+                if not git.has_local_branch(choice) then
+                        notify(string.format("Branch %s not found", choice), vim.log.levels.WARN)
+                        return
+                end
+
+                run_and_refresh(function()
+                        return select(1, git.switch(choice))
+                end, string.format("Switched to %s", choice))
+        end)
 end
 
 local function remote_add()
