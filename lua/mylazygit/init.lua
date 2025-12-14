@@ -2,6 +2,7 @@ local git = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
 local conflict = require("mylazygit.conflict")
+local ai = require("mylazygit.ai")
 
 local M = {}
 
@@ -17,6 +18,7 @@ local config = {
 	max_branch_lines = 10,
 	diff_args = { "--stat" },
 	diff_max_lines = 80,
+	ai = {},
 }
 
 local state = {
@@ -1304,6 +1306,7 @@ end
 
 function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
+	ai.setup(config.ai or {})
 
 	ensure_highlight("MyLazyGitPushed", { fg = "#98C379" })
 	ensure_highlight("MyLazyGitUnpushed", { fg = "#CD5C5C" })

@@ -81,6 +81,28 @@ Key | Action
 `w` | Run the merge workflow (`checkout main` → `pull` → `checkout branch` → `pull` → `rebase` → `merge`)
 `q` | Close the window
 
+## AI-generated commit messages
+
+MyLazyGit can ask [OpenRouter](https://openrouter.ai) for concise commit messages that describe your staged diff.
+
+- Export `OPENROUTER_API_KEY` (or set `ai.api_key` in the plugin setup).
+- Run `:MyLazyGitAICommit` to stage files as usual, then let the model draft the commit message. You can edit the suggestion before it commits.
+- Use `:MyLazyGitAISwitchModel` to swap to any other OpenRouter model id on the fly.
+
+The AI helper defaults to `meta-llama/llama-3.1-8b-instruct`, a low-cost instruct model that’s broadly available without relying on `:free` suffixed variants (those are limited per [OpenRouter’s free-usage limits](https://openrouter.ai/docs/api/reference/limits)). Override anything inside `ai` if you prefer a different model or tuning:
+
+```lua
+require('mylazygit').setup({
+  ai = {
+    api_key = os.getenv("OPENROUTER_API_KEY"),
+    model = "openai/gpt-4o-mini",
+    temperature = 0.3,
+    max_tokens = 256,
+    diff_max_lines = 400,
+  },
+})
+```
+
 The floating buffer is read-only and safe to keep open while editing. MyLazyGit automatically redraws after every git action so the status never goes stale.
 
 ## Notes
