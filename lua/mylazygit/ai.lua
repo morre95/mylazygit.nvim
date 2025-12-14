@@ -3,7 +3,7 @@ local git = require("mylazygit.git")
 local M = {}
 
 local default_config = {
-	model = "meta-llama/llama-3.1-8b-instruct",
+	model = "google/gemini-2.0-flash-lite-001",
 	base_url = "https://openrouter.ai/api/v1/chat/completions",
 	headers = {
 		["HTTP-Referer"] = "https://github.com/morre95/mylazygit.nvim",
