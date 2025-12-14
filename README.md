@@ -89,7 +89,7 @@ MyLazyGit can ask [OpenRouter](https://openrouter.ai) for concise commit message
 - Run `:MyLazyGitAICommit` to stage files as usual, then let the model draft the commit message. You can edit the suggestion before it commits.
 - Use `:MyLazyGitAISwitchModel` to swap to any other OpenRouter model id on the fly.
 
-The AI helper defaults to `google/gemini-2.0-flash-lite-001`, a low-cost instruct model that’s broadly available without relying on `:free` suffixed variants (those are limited per [OpenRouter’s free-usage limits](https://openrouter.ai/docs/api/reference/limits)). Override anything inside `ai` if you prefer a different model or tuning:
+The AI helper defaults to `meta-llama/llama-3.3-70b-instruct:free`, a low-cost instruct model that’s broadly available without relying on `:free` suffixed variants (those are limited per [OpenRouter’s free-usage limits](https://openrouter.ai/docs/api/reference/limits)). Override anything inside `ai` if you prefer a different model or tuning:
 
 ```lua
 require('mylazygit').setup({
