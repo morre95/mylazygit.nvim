@@ -524,7 +524,7 @@ local function create_sections()
 	end
 	local inner_width = math.max((dims.width or 0) - 4, 40)
 	local inner_height = math.max((dims.height or 0) - 4, 20)
-	local left_col = 2
+	local left_col = 1
 	local right_padding = 2
 	local left_width = math.floor(inner_width * 0.35)
 	local right_width = inner_width - left_width - right_padding
@@ -533,8 +533,8 @@ local function create_sections()
 	local info_height = 2
 	local keymap_height = 3
 	local content_row = info_height + 1
-	local gap = 1
-	local available_height = inner_height - content_row - keymap_height - gap
+	local gap = 2
+	local available_height = inner_height - content_row - keymap_height - gap + 2
 
 	local worktree_height = math.max(6, math.floor(available_height * 0.45))
 	local commits_height = math.max(5, math.floor(available_height * 0.25))
@@ -590,7 +590,7 @@ local function create_sections()
 		col = left_col,
 		title = " Keymap ",
 		filetype = "mylazygit-keymap",
-		title_pos = "center",
+		-- title_pos = "center",
 		wrap = true,
 	})
 end
