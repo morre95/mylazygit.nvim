@@ -7,6 +7,7 @@ local state = {
 	sections = {},
 	focus_order = { "worktree", "commits", "diff", "preview" },
 	focus_index = 1,
+	old_focus = 1,
 	bottom_view_order = { "local_branches", "remote_branches", "diff_preview" },
 	current_bottom_view_index = 1,
 	bottom_view_data = nil,
@@ -347,8 +348,16 @@ local function apply_navigation(buf)
 	local function prev_window()
 		M.focus_prev()
 	end
+	local function goto_preview()
+		M.focus_preview()
+	end
+	local function go_back()
+		M.focus_previous_tab()
+	end
 	vim.keymap.set("n", "<Tab>", next_window, { buffer = buf, silent = true, nowait = true })
 	vim.keymap.set("n", "<S-Tab>", prev_window, { buffer = buf, silent = true, nowait = true })
+	vim.keymap.set("n", "<C-h>", go_back, { buffer = buf, silent = true, nowait = true })
+	vim.keymap.set("n", "<C-l>", goto_preview, { buffer = buf, silent = true, nowait = true })
 end
 
 local function handle_commit_cursor(line, opts)
@@ -812,6 +821,19 @@ function M.focus_prev()
 		prev_index = #state.focus_order
 	end
 	focus_by_index(prev_index)
+end
+
+function M.focus_preview()
+	if vim.tbl_isempty(state.focus_order) then
+		return
+	end
+
+	state.old_focus = state.focus_index
+	focus_by_index(4)
+end
+
+function M.focus_previous_tab()
+	focus_by_index(state.old_focus)
 end
 
 function M.focus(name)
