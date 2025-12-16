@@ -207,7 +207,31 @@ function M.generate_commit_message()
 
 	local diff_lines = staged_diff()
 	if not diff_lines then
-		notify("No staged changes detected. Stage files before asking for a commit message.", vim.log.levels.INFO)
+		local status_items = git.status() or {}
+		if not vim.tbl_isempty(status_items) then
+			-- Offer to stage everything so the user can immediately retry.
+			vim.ui.select({ "Yes", "No" }, {
+				prompt = "No staged changes detected. Stage all changes and continue?",
+			}, function(choice)
+				if choice ~= "Yes" then
+					notify("No staged changes detected. Stage files before asking for a commit message.", vim.log.levels.INFO)
+					return
+				end
+
+				local ok = select(1, git.stage({ "." }))
+				if not ok then
+					notify("Failed to stage changes", vim.log.levels.ERROR)
+					return
+				end
+
+				notify("Changes staged. Retrying commit message generation …")
+				vim.schedule(function()
+					M.generate_commit_message()
+				end)
+			end)
+		else
+			notify("No staged changes detected. Stage files before asking for a commit message.", vim.log.levels.INFO)
+		end
 		return
 	end
 
