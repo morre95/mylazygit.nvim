@@ -288,7 +288,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [PF]force-push [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -682,6 +682,16 @@ local function git_push()
 	run_and_refresh(function()
 		return select(1, git.push(config.remote, branch))
 	end, string.format("Pushed to %s/%s", config.remote, branch))
+end
+
+local function git_push_force()
+	if not repo_required() then
+		return
+	end
+	local branch = git.current_branch() or config.branch_fallback
+	run_and_refresh(function()
+		return select(1, git.push_force(config.remote, branch))
+	end, string.format("Force pushed to %s/%s", config.remote, branch))
 end
 
 local function git_fetch()
@@ -1249,6 +1259,12 @@ keymap_mappings = {
 		rhs = git_push,
 		desc = "Push",
 		explain = "Git push will update the remote repository with the local changes",
+	},
+	{
+		lhs = "gPF",
+		rhs = git_push_force,
+		desc = "Push force",
+		explain = "Git push --force",
 	},
 
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },

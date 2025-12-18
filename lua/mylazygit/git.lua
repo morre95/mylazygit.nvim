@@ -76,6 +76,10 @@ function M.push(remote, branch)
 	return system({ "push", remote, branch })
 end
 
+function M.push_force(remote, branch)
+	return system({ "push", remote, branch, "--force" })
+end
+
 function M.merge(branch)
 	if not branch or branch == "" then
 		return false, { "Branch name required for merge" }
