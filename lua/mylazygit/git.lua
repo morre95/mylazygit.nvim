@@ -60,6 +60,14 @@ function M.commit(message)
         return system({ "commit", "-m", message })
 end
 
+function M.reset_soft(count)
+	count = tonumber(count)
+	if not count or count < 1 then
+		return false, { "Commit count required for soft reset" }
+	end
+	return system({ "reset", "--soft", string.format("HEAD~%d", count) })
+end
+
 function M.init()
 	return system({ "init" })
 end

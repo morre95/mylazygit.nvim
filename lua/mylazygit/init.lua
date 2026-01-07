@@ -288,7 +288,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [p]ull [P]ush [PF]force-push [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [gss]quash [p]ull [P]ush [PF]force-push [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -563,6 +563,64 @@ local function commit_changes()
 		run_and_refresh(function()
 			return select(1, git.commit(msg))
 		end, "Commit created")
+	end)
+end
+
+local function build_squash_message(entries, count)
+	local parts = {}
+	for i = count, 1, -1 do
+		local msg = entries[i] and entries[i].message or ""
+		msg = msg and vim.trim(msg) or ""
+		if msg ~= "" then
+			table.insert(parts, msg)
+		end
+	end
+	return table.concat(parts, " | ")
+end
+
+local function squash_commits()
+	if not repo_required() then
+		return
+	end
+
+	local entries = git.log(config.max_commit_lines)
+	if vim.tbl_isempty(entries) then
+		notify("No commits found to squash", vim.log.levels.WARN)
+		return
+	end
+
+	local options = {}
+	for idx, entry in ipairs(entries) do
+		table.insert(options, { index = idx, hash = entry.hash, message = entry.message })
+	end
+
+	vim.ui.select(options, {
+		prompt = "Squash commits (select oldest commit)",
+		format_item = function(item)
+			return string.format("%2d %s %s", item.index, item.hash, item.message or "")
+		end,
+	}, function(choice)
+		if not choice then
+			return
+		end
+
+		local count = choice.index
+		local default_message = build_squash_message(entries, count)
+
+		vim.ui.input({ prompt = "Commit message", default = default_message }, function(msg)
+			if not msg or vim.trim(msg) == "" then
+				notify("Squash cancelled (staged changes kept)", vim.log.levels.INFO)
+				return
+			end
+
+			run_and_refresh(function()
+				local reset_ok = select(1, git.reset_soft(count))
+				if not reset_ok then
+					return false
+				end
+				return select(1, git.commit(msg))
+			end, string.format("Squashed %d commit(s)", count))
+		end)
 	end)
 end
 
@@ -1247,6 +1305,12 @@ keymap_mappings = {
 	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage all files", explain = "" },
 	{ lhs = "gsp", rhs = git_pull_rabase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
+	{
+		lhs = "gss",
+		rhs = squash_commits,
+		desc = "Squash commits",
+		explain = "Soft-reset to the selected commit and create a new commit with a combined message.",
+	},
 
 	{
 		lhs = "p",
