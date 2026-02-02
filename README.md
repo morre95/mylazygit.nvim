@@ -24,7 +24,7 @@ return {
     local branch = vim.fn.systemlist("git branch --show-current")[1] or "main"
     local remote_name = vim.fn.systemlist("git remote -v | cut -f1 | uniq")[1] or "origin"
     require('mylazygit').setup({
-      remote = remote_name,        -- change if you use something else
+      remote = remote_name,     -- change if you use something else
       branch_fallback = branch, -- used when HEAD is detached
       merge_workflow = {
         main_branch = branch,   -- base branch for the workflow helper
@@ -32,7 +32,7 @@ return {
       },
       log_limit = 5,            -- number of log messages shown in the panel
       max_commit_lines = 100,   -- number of commits shown in the panel
-     max_branch_lines = 10,    -- number of branches shown in the panel
+      max_branch_lines = 10,    -- number of branches shown in the panel
       diff_args = { '--stat' }, -- passed to `git diff`
       diff_max_lines = 80,      -- trim diff panel for readability
     })
