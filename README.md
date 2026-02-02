@@ -21,8 +21,8 @@ Use your favorite plugin manager. Example with [lazy.nvim](https://github.com/fo
 return {
   'morre95/mylazygit.nvim',
   config = function()
-    local branch = vim.fn.systemlist("git branch --show-current")[1] or "main"
-    local remote_name = vim.fn.systemlist("git remote -v | cut -f1 | uniq")[1] or "origin"
+    local branch = vim.fn.systemlist({ "git", "branch", "--show-current" })[1] or "main"
+    local remote_name = vim.fn.systemlist({ "git", "remote" })[1] or "origin"
     require('mylazygit').setup({
       remote = remote_name,     -- change if you use something else
       branch_fallback = branch, -- used when HEAD is detached

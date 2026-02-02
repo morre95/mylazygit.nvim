@@ -3,7 +3,7 @@ local git = require("mylazygit.git")
 local M = {}
 
 local default_config = {
-	model = "meta-llama/llama-3.3-70b-instruct:free",
+	model = "tngtech/deepseek-r1t2-chimera:free",
 	base_url = "https://openrouter.ai/api/v1/chat/completions",
 	headers = {
 		["HTTP-Referer"] = "https://github.com/morre95/mylazygit.nvim",
@@ -214,7 +214,10 @@ function M.generate_commit_message()
 				prompt = "No staged changes detected. Stage all changes and continue?",
 			}, function(choice)
 				if choice ~= "Yes" then
-					notify("No staged changes detected. Stage files before asking for a commit message.", vim.log.levels.INFO)
+					notify(
+						"No staged changes detected. Stage files before asking for a commit message.",
+						vim.log.levels.INFO
+					)
 					return
 				end
 
