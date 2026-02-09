@@ -18,7 +18,11 @@ local function parse_conflicts(file_path)
     return nil, "Could not open file"
   end
   local stat = uv.fs_fstat(fd)
-  local content = uv.fs_read(fd, stat.size, 0)
+  if not stat then
+    uv.fs_close(fd)
+    return nil, "Could not stat file"
+  end
+  local content = uv.fs_read(fd, stat.size, 0) or ""
   uv.fs_close(fd)
 
   local lines = vim.split(content, "\n", { plain = true })

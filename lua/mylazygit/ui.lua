@@ -916,10 +916,10 @@ local function resize_layout()
 		return
 	end
 
-	state.dimensions = compute_dimensions()
-	local dims = state.dimensions
-	local inner_width = math.max((dims.width or 0) - 4, 40)
-	local inner_height = math.max((dims.height or 0) - 4, 20)
+	local dims = compute_dimensions()
+	state.dimensions = dims
+	local inner_width = math.max(dims.width - 4, 40)
+	local inner_height = math.max(dims.height - 4, 20)
 	local left_col = 1
 	local right_padding = 2
 	local left_width = math.floor(inner_width * 0.35)
@@ -941,10 +941,10 @@ local function resize_layout()
 	if state.root and state.root.win and vim.api.nvim_win_is_valid(state.root.win) then
 		vim.api.nvim_win_set_config(state.root.win, {
 			relative = "editor",
-			width = dims.width,
-			height = dims.height,
-			row = dims.row,
-			col = dims.col,
+			width = dims.width or 80,
+			height = dims.height or 24,
+			row = dims.row or 1,
+			col = dims.col or 1,
 		})
 	end
 

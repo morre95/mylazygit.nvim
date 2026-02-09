@@ -476,7 +476,7 @@ local function run_and_refresh(fn, success_msg)
 end
 
 local function run_async_and_refresh(async_fn, success_msg)
-	async_fn(function(ok, _output)
+	async_fn(function(ok)
 		if ok and success_msg then
 			notify(success_msg)
 		end
