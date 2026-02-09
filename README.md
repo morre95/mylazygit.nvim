@@ -8,7 +8,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Always-on log/diff panel showing `git log --oneline` and a trimmed `git diff`, with color cues for pushed (green) vs local-only (red) commits
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
-- Run `git init`, `git pull`, `git push`, and `git fetch` against a configurable remote
+- Run `git init`, `git pull --rebase`, `git push`, and `git fetch` against a configurable remote
 - One-key merge workflow that rebases a feature branch on main before merging it back
 - Refresh view at any time to keep the status in sync
 
@@ -51,7 +51,7 @@ return {
 }
 ```
 
-> **Note:** The workflow operates only on local branches. It will pull a branch only when it has an upstream configured (`branch@{upstream}`); otherwise the pull step is skipped. Interactive rebases (e.g. `rebase_args = { '-i' }`) still require a working `$GIT_SEQUENCE_EDITOR` inside Neovim (many users rely on `nvr --remote-wait`); without that setup Git will block waiting for an editor.
+> **Note:** The workflow operates only on local branches. It will pull a branch only when it has an upstream configured (`branch@{upstream}`); otherwise the pull step is skipped. Pull steps are run with `--rebase` to keep history linear and avoid merge commits like `Merge branch 'main' of ...` after conflict resolution. Interactive rebases (e.g. `rebase_args = { '-i' }`) still require a working `$GIT_SEQUENCE_EDITOR` inside Neovim (many users rely on `nvr --remote-wait`); without that setup Git will block waiting for an editor.
 
 The plugin registers a `:MyLazyGit` command. Map it or call it directly:
 
@@ -69,7 +69,7 @@ Key | Action
 `gsr` | Restore tracked files with unstaged changes (`git restore -- <file>`)
 `u` | Unstage a file
 `c` | Commit staged changes (prompts for message)
-`p` | Pull from the configured remote/branch
+`p` | Pull with rebase from the configured remote/branch (`git pull --rebase`)
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
 `n` | Create and switch to a new branch (`git switch -c`)
@@ -78,7 +78,7 @@ Key | Action
 `R` | Run `git remote add` (prompts for name + URL)
 `U` | Run `git remote set-url` (prompts for name + URL)
 `i` | Run `git init`
-`w` | Run the merge workflow (`checkout main` → `pull` → `checkout branch` → `pull` → `rebase` → `merge`)
+`w` | Run the merge workflow (`checkout main` → `pull --rebase` → `checkout branch` → `pull --rebase` → `rebase` → `merge`)
 `q` | Close the window
 
 ## AI-generated commit messages

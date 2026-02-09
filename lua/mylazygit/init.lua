@@ -717,8 +717,8 @@ local function git_pull()
 	end
 	local branch = git.current_branch() or config.branch_fallback
 	run_and_refresh(function()
-		return select(1, git.pull(config.remote, branch))
-	end, string.format("Pulled %s/%s", config.remote, branch))
+		return select(1, git.pull_rebase(config.remote, branch))
+	end, string.format("Pulled (rebase) %s/%s", config.remote, branch))
 end
 
 local function git_pull_rabase()
@@ -1316,7 +1316,7 @@ keymap_mappings = {
 		lhs = "p",
 		rhs = git_pull,
 		desc = "Pull",
-		explain = "Git pull will incorporates changes from a remote repository into the current branch.",
+		explain = "Runs git pull --rebase to avoid automatic merge commits like `Merge branch 'main' ...`.",
 	},
 	{
 		lhs = "P",
