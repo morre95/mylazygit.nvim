@@ -28,6 +28,20 @@ local function system(args, opts)
 	return ok, output
 end
 
+local function system_external(bin, args, opts)
+	opts = opts or {}
+	local cmd = { bin }
+	vim.list_extend(cmd, normalize(args or {}))
+
+	local output = vim.fn.systemlist(cmd)
+	local ok = vim.v.shell_error == 0
+	if not ok and not opts.silent then
+		vim.notify(table.concat(output, "\n"), vim.log.levels.ERROR, { title = "MyLazyGit" })
+	end
+
+	return ok, output
+end
+
 function M.is_repo()
 	local ok = select(1, system({ "rev-parse", "--is-inside-work-tree" }, { silent = true }))
 	return ok
@@ -481,6 +495,41 @@ function M.check_conflicts(remote, branch)
 		remote = remote,
 		branch = branch,
 	}
+end
+
+function M.create_pull_request(opts)
+	opts = opts or {}
+
+	if vim.fn.executable("gh") ~= 1 then
+		return false, {
+			"GitHub CLI (`gh`) is not installed or not available in $PATH.",
+			"Install from https://cli.github.com and run `gh auth login`.",
+		}
+	end
+
+	local title = trim(opts.title or "")
+	if title == "" then
+		return false, { "PR title is required" }
+	end
+
+	local body = opts.body or ""
+	local args = { "pr", "create", "--title", title, "--body", body }
+
+	if opts.base and trim(opts.base) ~= "" then
+		table.insert(args, "--base")
+		table.insert(args, trim(opts.base))
+	end
+
+	if opts.head and trim(opts.head) ~= "" then
+		table.insert(args, "--head")
+		table.insert(args, trim(opts.head))
+	end
+
+	if opts.draft then
+		table.insert(args, "--draft")
+	end
+
+	return system_external("gh", args)
 end
 
 return M
