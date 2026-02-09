@@ -529,6 +529,43 @@ local function restore_file()
 	end)
 end
 
+local function restore_all_files()
+	if not repo_required() then
+		return
+	end
+
+	local has_restorable = false
+	for _, item in ipairs(state.status) do
+		if has_unstaged_change(item.unstaged) and not has_untracked_change(item.staged, item.unstaged) then
+			has_restorable = true
+			break
+		end
+	end
+
+	if not has_restorable then
+		notify("No files with unstaged changes to restore", vim.log.levels.INFO)
+		return
+	end
+
+	local confirmation = vim.fn.confirm(
+		"Discard ALL unstaged changes? This cannot be undone.",
+		"&Yes\n&No",
+		2
+	)
+	if confirmation ~= 1 then
+		notify("Restore cancelled", vim.log.levels.INFO)
+		return
+	end
+
+	local files = collect_files(function(item)
+		return has_unstaged_change(item.unstaged) and not has_untracked_change(item.staged, item.unstaged)
+	end)
+
+	run_and_refresh(function()
+		return select(1, git.restore(files))
+	end, string.format("Restored %d file(s)", #files))
+end
+
 local function unstage_file()
 	if not repo_required() then
 		return
@@ -1514,6 +1551,12 @@ keymap_mappings = {
 		rhs = restore_file,
 		desc = "Restore file",
 		explain = "Discard unstaged changes for selected tracked files (git restore -- <file>).\nThis reverts the working copy to match the index. Untracked files are not affected.\nWarning: discarded changes cannot be recovered.",
+	},
+	{
+		lhs = "gsR",
+		rhs = restore_all_files,
+		desc = "Restore all files",
+		explain = "Discard ALL unstaged changes in every tracked file (git restore -- <files>).\nA confirmation prompt is shown before proceeding.\nUntracked files are not affected.\n\nWarning: this is destructive and cannot be undone.",
 	},
 	{
 		lhs = "gsa",
