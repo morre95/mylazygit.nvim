@@ -161,10 +161,10 @@ function M.merge_workflow(opts)
 		if not upstream then
 			return nil
 		end
-		local label = string.format("pull %s (%s/%s)", branch, upstream.remote, upstream.branch)
+		local label = string.format("pull --rebase %s (%s/%s)", branch, upstream.remote, upstream.branch)
 		return {
 			label = label,
-			args = { "pull", upstream.remote, upstream.branch },
+			args = { "pull", "--rebase", upstream.remote, upstream.branch },
 		}
 	end
 
