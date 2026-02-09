@@ -772,6 +772,18 @@ local function create_pull_request()
 		return
 	end
 
+	local upstream = git.branch_upstream(current_branch)
+	if not upstream then
+		notify(
+			string.format(
+				"Current branch '%s' has no upstream. Push it first (keymap: P) and retry gpr.",
+				current_branch
+			),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
 
 	helpers.centered_dual_input({
@@ -789,6 +801,19 @@ local function create_pull_request()
 			return
 		end
 
+		if base ~= "" and base == current_branch then
+			notify("Base branch cannot be the same as the current branch", vim.log.levels.WARN)
+			return
+		end
+
+		if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(config.remote, base) then
+			notify(
+				string.format("Base branch '%s' was not found locally or on %s", base, config.remote),
+				vim.log.levels.WARN
+			)
+			return
+		end
+
 		vim.ui.input({ prompt = "PR body (optional): " }, function(body)
 			body = body or ""
 			run_and_refresh(function()
@@ -796,7 +821,7 @@ local function create_pull_request()
 					title = title,
 					body = body,
 					base = base ~= "" and base or nil,
-					head = current_branch,
+					head = upstream.branch,
 				}))
 			end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
 		end)

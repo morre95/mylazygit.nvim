@@ -279,6 +279,16 @@ function M.remote_branches()
 	return branches
 end
 
+function M.has_remote_branch(remote, branch)
+	remote = trim(remote or "")
+	branch = trim(branch or "")
+	if remote == "" or branch == "" then
+		return false
+	end
+	local ref = string.format("refs/remotes/%s/%s", remote, branch)
+	return select(1, system({ "show-ref", "--verify", ref }, { silent = true }))
+end
+
 function M.remote_add(name, url)
 	return system({ "remote", "add", name, url })
 end
