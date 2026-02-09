@@ -41,10 +41,12 @@ end
 
 local keymap_mappings
 
-local function ensure_highlight(name, opts)
-	if vim.fn.hlexists(name) == 0 then
-		vim.api.nvim_set_hl(0, name, opts)
-	end
+local function define_highlights()
+	vim.api.nvim_set_hl(0, "MyLazyGitPushed", { fg = "#98C379", default = true })
+	vim.api.nvim_set_hl(0, "MyLazyGitUnpushed", { fg = "#CD5C5C", default = true })
+	vim.api.nvim_set_hl(0, "MyLazyGitStagedIndicator", { fg = "#98C379", default = true })
+	vim.api.nvim_set_hl(0, "MyLazyGitUnstagedIndicator", { fg = "#E5C07B", default = true })
+	vim.api.nvim_set_hl(0, "MyLazyGitUntrackedIndicator", { fg = "#9E9E9E", default = true })
 end
 
 local function notify(msg, level)
@@ -288,7 +290,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [gss]quash [p]ull [P]ush [PF]force-push [f]etch [gpr]create-pr [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
+				"[?]help [r]efresh [Space]toggle-stage [gsa]dd-all [c]ommit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -473,6 +475,17 @@ local function run_and_refresh(fn, success_msg)
 	end
 end
 
+local function run_async_and_refresh(async_fn, success_msg)
+	async_fn(function(ok, _output)
+		if ok and success_msg then
+			notify(success_msg)
+		end
+		if ok then
+			M.refresh()
+		end
+	end)
+end
+
 local function choose_files(prompt, predicate, cb, message_fn)
 	local files = collect_files(predicate)
 	select_multiple(files, prompt, function(selection)
@@ -521,10 +534,9 @@ local function unstage_file()
 		return
 	end
 	choose_files("Unstage file", nil, function(item)
-		-- return item.staged ~= " "
 		return select(1, git.unstage(item))
 	end, function(selection)
-		return string.format("Staged %d file(s)", #selection)
+		return string.format("Unstaged %d file(s)", #selection)
 	end)
 end
 
@@ -689,12 +701,12 @@ local function stage_all_and_commit_and_pull()
 			notify(string.format("Pulled and rebase %s/%s", config.remote, branch))
 		end
 
-		-- TBD: Try this confirmation thingy and se if it is usefull
-		-- local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
-		-- if confirmation ~= 1 then
-		-- 	notify("Pushing was cancelled", vim.log.levels.INFO)
-		-- 	return
-		-- end
+		local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
+		if confirmation ~= 1 then
+			notify("Push cancelled", vim.log.levels.INFO)
+			M.refresh()
+			return
+		end
 
 		local pushed_ok = select(1, git.push(config.remote, branch))
 		if pushed_ok then
@@ -716,19 +728,19 @@ local function git_pull()
 		return
 	end
 	local branch = git.current_branch() or config.branch_fallback
-	run_and_refresh(function()
-		return select(1, git.pull_rebase(config.remote, branch))
+	run_async_and_refresh(function(cb)
+		git.pull_rebase_async(config.remote, branch, cb)
 	end, string.format("Pulled (rebase) %s/%s", config.remote, branch))
 end
 
-local function git_pull_rabase()
+local function git_pull_rebase()
 	if not repo_required() then
 		return
 	end
 
 	local branch = git.current_branch() or config.branch_fallback
-	run_and_refresh(function()
-		return select(1, git.pull_rebase(config.remote, branch))
+	run_async_and_refresh(function(cb)
+		git.pull_rebase_async(config.remote, branch, cb)
 	end, string.format("Pull and rebase from %s/%s", config.remote, branch))
 end
 
@@ -737,8 +749,8 @@ local function git_push()
 		return
 	end
 	local branch = git.current_branch() or config.branch_fallback
-	run_and_refresh(function()
-		return select(1, git.push(config.remote, branch))
+	run_async_and_refresh(function(cb)
+		git.push_async(config.remote, branch, cb)
 	end, string.format("Pushed to %s/%s", config.remote, branch))
 end
 
@@ -747,8 +759,8 @@ local function git_push_force()
 		return
 	end
 	local branch = git.current_branch() or config.branch_fallback
-	run_and_refresh(function()
-		return select(1, git.push_force(config.remote, branch))
+	run_async_and_refresh(function(cb)
+		git.push_force_async(config.remote, branch, cb)
 	end, string.format("Force pushed to %s/%s", config.remote, branch))
 end
 
@@ -756,8 +768,8 @@ local function git_fetch()
 	if not repo_required() then
 		return
 	end
-	run_and_refresh(function()
-		return select(1, git.fetch(config.remote))
+	run_async_and_refresh(function(cb)
+		git.fetch_async(config.remote, cb)
 	end, string.format("Fetched %s", config.remote))
 end
 
@@ -816,13 +828,13 @@ local function create_pull_request()
 
 		vim.ui.input({ prompt = "PR body (optional): " }, function(body)
 			body = body or ""
-			run_and_refresh(function()
-				return select(1, git.create_pull_request({
+			run_async_and_refresh(function(cb)
+				git.create_pull_request_async({
 					title = title,
 					body = body,
 					base = base ~= "" and base or nil,
 					head = upstream.branch,
-				}))
+				}, cb)
 			end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
 		end)
 	end)
@@ -886,8 +898,6 @@ local function resolve_conflicts()
 			end
 		end)
 	end
-
-	M.refresh()
 end
 
 local function switch_new_branch()
@@ -1230,7 +1240,7 @@ local function show_keymap_popup()
 	local function render_preview(idx)
 		local lines
 		if not idx then
-			lines = { "Move the marker to keymap to get more explination." }
+			lines = { "Move the cursor to a keymap to see its explanation." }
 		else
 			local m = mappings[idx] or {}
 			local explain = m.explain
@@ -1242,7 +1252,7 @@ local function show_keymap_popup()
 				lines = { "No explanation available" }
 			end
 			-- Lägg till titelrad
-			local title = string.format("Explination %s", m.desc or m.lhs or "")
+			local title = string.format("Explanation: %s", m.desc or m.lhs or "")
 			table.insert(lines, 1, title)
 			table.insert(lines, 2, string.rep("—", math.min(#title, preview_width - 2)))
 		end
@@ -1336,7 +1346,136 @@ local function delete_branch_force()
 	delete_branch(true)
 end
 
--- TODO: Add explination to keymaps
+local function amend_commit()
+	if not repo_required() then
+		return
+	end
+
+	local entries = git.log(1)
+	local default_msg = (entries[1] and entries[1].message) or ""
+
+	helpers.centered_input({ prompt = "Amend message", title = "Amend Commit", default = default_msg }, function(msg)
+		if not msg then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.commit_amend(msg))
+		end, "Commit amended")
+	end)
+end
+
+local function toggle_stage_current()
+	if not repo_required() then
+		return
+	end
+
+	local line = ui.get_current_worktree_line()
+	if not line then
+		notify("No file selected", vim.log.levels.WARN)
+		return
+	end
+
+	local item = state.status[line]
+	if not item then
+		return
+	end
+
+	if has_staged_change(item.staged) then
+		run_and_refresh(function()
+			return select(1, git.unstage({ item.file }))
+		end, string.format("Unstaged %s", item.file))
+	else
+		run_and_refresh(function()
+			return select(1, git.stage({ item.file }))
+		end, string.format("Staged %s", item.file))
+	end
+end
+
+local function stash_push()
+	if not repo_required() then
+		return
+	end
+
+	helpers.centered_input({ prompt = "Message (optional)", title = "Stash Push" }, function(msg)
+		if msg == nil then
+			return
+		end
+		run_and_refresh(function()
+			return select(1, git.stash_push(msg))
+		end, "Changes stashed")
+	end)
+end
+
+local function stash_pop()
+	if not repo_required() then
+		return
+	end
+
+	local stashes = git.stash_list()
+	if vim.tbl_isempty(stashes) then
+		notify("No stashes found", vim.log.levels.INFO)
+		return
+	end
+
+	if #stashes == 1 then
+		run_and_refresh(function()
+			return select(1, git.stash_pop(0))
+		end, "Stash popped")
+		return
+	end
+
+	vim.ui.select(stashes, { prompt = "Pop stash" }, function(choice)
+		if not choice then
+			return
+		end
+		local idx = 0
+		for i, s in ipairs(stashes) do
+			if s == choice then
+				idx = i - 1
+				break
+			end
+		end
+		run_and_refresh(function()
+			return select(1, git.stash_pop(idx))
+		end, "Stash popped")
+	end)
+end
+
+local function stash_drop()
+	if not repo_required() then
+		return
+	end
+
+	local stashes = git.stash_list()
+	if vim.tbl_isempty(stashes) then
+		notify("No stashes found", vim.log.levels.INFO)
+		return
+	end
+
+	vim.ui.select(stashes, { prompt = "Drop stash" }, function(choice)
+		if not choice then
+			return
+		end
+		local idx = 0
+		for i, s in ipairs(stashes) do
+			if s == choice then
+				idx = i - 1
+				break
+			end
+		end
+
+		local confirmation = vim.fn.confirm(string.format("Drop %s?", choice), "&Yes\n&No", 2)
+		if confirmation ~= 1 then
+			notify("Stash drop cancelled", vim.log.levels.INFO)
+			return
+		end
+
+		run_and_refresh(function()
+			return select(1, git.stash_drop(idx))
+		end, "Stash dropped")
+	end)
+end
+
 keymap_mappings = {
 	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
 	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
@@ -1370,7 +1509,7 @@ keymap_mappings = {
 
 	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
 	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage all files", explain = "" },
-	{ lhs = "gsp", rhs = git_pull_rabase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
+	{ lhs = "gsp", rhs = git_pull_rebase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
 	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
 	{
 		lhs = "gss",
@@ -1437,6 +1576,39 @@ keymap_mappings = {
 		explain = "Run the merge workflow (checkout main → pull → checkout branch → pull → rebase → merge)",
 	},
 	{ lhs = "gbr", rhs = rebase_branch, desc = "Git rebase branch", explain = "" },
+
+	{
+		lhs = "A",
+		rhs = amend_commit,
+		desc = "Amend commit",
+		explain = "Amend the last commit. You can edit the commit message or keep it unchanged.",
+	},
+	{
+		lhs = "<Space>",
+		rhs = toggle_stage_current,
+		desc = "Toggle stage",
+		explain = "Toggle staging for the file under the cursor in the worktree pane.",
+	},
+
+	{
+		lhs = "gzz",
+		rhs = stash_push,
+		desc = "Stash push",
+		explain = "Stash your working directory changes with an optional message (git stash push).",
+	},
+	{
+		lhs = "gzp",
+		rhs = stash_pop,
+		desc = "Stash pop",
+		explain = "Pop the most recent stash or select one to pop (git stash pop).",
+	},
+	{
+		lhs = "gzd",
+		rhs = stash_drop,
+		desc = "Stash drop",
+		explain = "Select a stash entry to drop (git stash drop).",
+	},
+
 	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
 	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view", explain = "" },
 	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help", explain = "" },
@@ -1456,16 +1628,16 @@ function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
 	ai.setup(config.ai or {})
 
-	ensure_highlight("MyLazyGitPushed", { fg = "#98C379" })
-	ensure_highlight("MyLazyGitUnpushed", { fg = "#CD5C5C" })
-	ensure_highlight("MyLazyGitStagedIndicator", { fg = "#98C379" })
-	ensure_highlight("MyLazyGitUnstagedIndicator", { fg = "#E5C07B" })
-	ensure_highlight("MyLazyGitUntrackedIndicator", { fg = "#9E9E9E" })
-
 	if vim.fn.has("nvim-0.8") == 0 then
 		notify("MyLazyGit requires Neovim 0.8 or newer", vim.log.levels.ERROR)
 		return
 	end
+
+	define_highlights()
+	vim.api.nvim_create_autocmd("ColorScheme", {
+		group = vim.api.nvim_create_augroup("MyLazyGitHighlights", { clear = true }),
+		callback = define_highlights,
+	})
 
 	vim.api.nvim_create_user_command("MyLazyGit", function()
 		M.open()
