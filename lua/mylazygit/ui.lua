@@ -655,7 +655,7 @@ local function render_worktree(data)
 	local total_items = math.max(#items, 1)
 	local target_line = math.min(previous_line, total_items)
 	state.current_worktree_line = target_line
-	vim.api.nvim_win_set_cursor(section.win, { target_line, 0 })
+	pcall(vim.api.nvim_win_set_cursor, section.win, { target_line, 0 })
 	if section.buf and not section.listener_attached then
 		attach_worktree_listener(section.buf, section.win)
 		section.listener_attached = true
@@ -779,10 +779,9 @@ local function apply_keymaps()
 	if ok then
 		wk.add({
 			{ "gs", group = "git stage" },
-		})
-
-		wk.add({
 			{ "gb", group = "git branch" },
+			{ "gz", group = "git stash" },
+			{ "gP", group = "git push" },
 		})
 	end
 end
@@ -829,7 +828,12 @@ function M.focus_preview()
 	end
 
 	state.old_focus = state.focus_index
-	focus_by_index(4)
+	for idx, name in ipairs(state.focus_order) do
+		if name == "preview" then
+			focus_by_index(idx)
+			return
+		end
+	end
 end
 
 function M.focus_previous_tab()
@@ -873,6 +877,10 @@ function M.get_bottom_view()
 	return active_bottom_view_name()
 end
 
+function M.get_current_worktree_line()
+	return state.current_worktree_line
+end
+
 function M.show_preview(lines, opts)
 	local section = state.sections.preview
 	if not section then
@@ -903,6 +911,66 @@ function M.render(payload)
 	render_keymap(payload.keymap or {})
 end
 
+local function resize_layout()
+	if not M.is_open() then
+		return
+	end
+
+	state.dimensions = compute_dimensions()
+	local dims = state.dimensions
+	local inner_width = math.max((dims.width or 0) - 4, 40)
+	local inner_height = math.max((dims.height or 0) - 4, 20)
+	local left_col = 1
+	local right_padding = 2
+	local left_width = math.floor(inner_width * 0.35)
+	local right_width = inner_width - left_width - right_padding
+	local right_col = left_col + left_width + right_padding
+
+	local info_height = 2
+	local keymap_height = 3
+	local content_row = info_height + 1
+	local gap = 2
+	local available_height = inner_height - content_row - keymap_height - gap + 2
+
+	local worktree_height = math.max(6, math.floor(available_height * 0.45))
+	local commits_height = math.max(5, math.floor(available_height * 0.25))
+	local diff_height = math.max(5, available_height - worktree_height - commits_height - gap * 2)
+	local preview_height = worktree_height + commits_height + diff_height + gap * 2
+
+	-- Resize root window
+	if state.root and state.root.win and vim.api.nvim_win_is_valid(state.root.win) then
+		vim.api.nvim_win_set_config(state.root.win, {
+			relative = "editor",
+			width = dims.width,
+			height = dims.height,
+			row = dims.row,
+			col = dims.col,
+		})
+	end
+
+	local layout = {
+		worktree = { width = left_width, height = worktree_height, row = content_row, col = left_col },
+		commits = { width = left_width, height = commits_height, row = content_row + worktree_height + gap, col = left_col },
+		diff = { width = left_width, height = diff_height, row = content_row + worktree_height + commits_height + gap * 2, col = left_col },
+		preview = { width = right_width, height = preview_height, row = content_row, col = right_col },
+		keymap = { width = inner_width, height = keymap_height, row = content_row + preview_height + gap, col = left_col },
+	}
+
+	for name, cfg in pairs(layout) do
+		local section = state.sections[name]
+		if section and section.win and vim.api.nvim_win_is_valid(section.win) then
+			vim.api.nvim_win_set_config(section.win, {
+				relative = "win",
+				win = state.root.win,
+				width = cfg.width,
+				height = cfg.height,
+				row = cfg.row,
+				col = cfg.col,
+			})
+		end
+	end
+end
+
 function M.open()
 	if M.is_open() then
 		M.focus("worktree")
@@ -916,6 +984,16 @@ function M.open()
 	apply_keymaps()
 	M.reset_preview()
 	M.focus("worktree")
+
+	-- Handle terminal resize
+	local group = ensure_autocmd_group()
+	vim.api.nvim_create_autocmd("VimResized", {
+		group = group,
+		callback = function()
+			resize_layout()
+		end,
+	})
+
 	return state.root.buf, state.root.win
 end
 

@@ -12,13 +12,14 @@ local state = {
 
 -- Parse a file and extract conflicts
 local function parse_conflicts(file_path)
-	local file = io.open(file_path, "r")
-	if not file then
+	local uv = vim.uv or vim.loop
+	local fd = uv.fs_open(file_path, "r", 438)
+	if not fd then
 		return nil, "Could not open file"
 	end
-
-	local content = file:read("*all")
-	file:close()
+	local stat = uv.fs_fstat(fd)
+	local content = uv.fs_read(fd, stat.size, 0)
+	uv.fs_close(fd)
 
 	local lines = vim.split(content, "\n", { plain = true })
 	local conflicts = {}
@@ -260,6 +261,8 @@ local function render()
 					current_line = current_line + #prev_conflict.ours
 				elseif prev_conflict.resolution == "theirs" then
 					current_line = current_line + #prev_conflict.theirs
+				elseif type(prev_conflict.resolution) == "table" then
+					current_line = current_line + #prev_conflict.resolution
 				end
 			else
 				-- Unresolved: markers + ours + separator + theirs + end marker
@@ -390,14 +393,14 @@ local function save_and_close()
 	local final_lines = build_result()
 
 	-- Write to file
-	local file = io.open(state.file_path, "w")
-	if not file then
+	local uv = vim.uv or vim.loop
+	local fd = uv.fs_open(state.file_path, "w", 438)
+	if not fd then
 		vim.notify("Failed to write to file: " .. state.file_path, vim.log.levels.ERROR)
 		return
 	end
-
-	file:write(table.concat(final_lines, "\n"))
-	file:close()
+	uv.fs_write(fd, table.concat(final_lines, "\n") .. "\n")
+	uv.fs_close(fd)
 
 	vim.notify(string.format("Saved %s", state.file_path), vim.log.levels.INFO)
 
