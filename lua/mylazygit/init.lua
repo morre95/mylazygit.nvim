@@ -288,7 +288,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [gss]quash [p]ull [P]ush [PF]force-push [f]etch [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
+				"Keymap: [?]help [r]efresh [s]tage [a]dd-all [u]nstage [c]ommit [gss]quash [p]ull [P]ush [PF]force-push [f]etch [gpr]create-pr [C]heck-conflicts [X]resolve [m]erge [i]nit [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -759,6 +759,48 @@ local function git_fetch()
 	run_and_refresh(function()
 		return select(1, git.fetch(config.remote))
 	end, string.format("Fetched %s", config.remote))
+end
+
+local function create_pull_request()
+	if not repo_required() then
+		return
+	end
+
+	local current_branch = git.current_branch()
+	if not current_branch then
+		notify("Cannot create a PR from detached HEAD", vim.log.levels.WARN)
+		return
+	end
+
+	local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
+
+	helpers.centered_dual_input({
+		title = "Create Pull Request",
+		prompt1 = "Title",
+		prompt2 = "Base",
+		default1 = string.format("%s", current_branch),
+		default2 = base_branch or "main",
+	}, function(title, base)
+		title = title and vim.trim(title) or ""
+		base = base and vim.trim(base) or ""
+
+		if title == "" then
+			notify("PR title is required", vim.log.levels.WARN)
+			return
+		end
+
+		vim.ui.input({ prompt = "PR body (optional): " }, function(body)
+			body = body or ""
+			run_and_refresh(function()
+				return select(1, git.create_pull_request({
+					title = title,
+					body = body,
+					base = base ~= "" and base or nil,
+					head = current_branch,
+				}))
+			end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
+		end)
+	end)
 end
 
 local function check_conflicts()
@@ -1332,6 +1374,7 @@ keymap_mappings = {
 	},
 
 	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
+	{ lhs = "gpr", rhs = create_pull_request, desc = "Create pull request", explain = "Create a GitHub pull request using gh pr create" },
 	{
 		lhs = "C",
 		rhs = check_conflicts,

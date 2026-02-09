@@ -9,6 +9,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
 - Run `git init`, `git pull --rebase`, `git push`, and `git fetch` against a configurable remote
+- Create GitHub pull requests from inside Neovim via `gh pr create`
 - One-key merge workflow that rebases a feature branch on main before merging it back
 - Refresh view at any time to keep the status in sync
 
@@ -72,6 +73,7 @@ Key | Action
 `p` | Pull with rebase from the configured remote/branch (`git pull --rebase`)
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
+`gpr` | Create a GitHub pull request (prompts for title/base/body; requires `gh`)
 `n` | Create and switch to a new branch (`git switch -c`)
 `b` | Switch to an existing branch (picker)
 `gbR` | Select and switch to a remote branch (creates a local tracking branch)
@@ -110,4 +112,5 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 - All git operations happen in the current working directory of Neovim. Change directories (`:cd`, `:lcd`, or via your file tree) before launching if needed.
 - Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the `branch_fallback` option is used instead.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
+- Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).
