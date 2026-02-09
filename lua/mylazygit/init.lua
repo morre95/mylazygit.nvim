@@ -1477,141 +1477,258 @@ local function stash_drop()
 end
 
 keymap_mappings = {
-	{ lhs = "q", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
-	{ lhs = "<Esc>", rhs = ui.close, desc = "Quit MyLazyGit", explain = "Quit and close this view" },
-	{ lhs = "r", rhs = M.refresh, desc = "Refresh status", explain = "Refresh everything" },
-	{ lhs = "i", rhs = git_init, desc = "Git init", explain = "This command creates an empty Git repository." },
-	{ lhs = "gsf", rhs = stage_file, desc = "Stage file", explain = "Stage file by file" },
+	{
+		lhs = "q",
+		rhs = ui.close,
+		desc = "Quit MyLazyGit",
+		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
+	},
+	{
+		lhs = "<Esc>",
+		rhs = ui.close,
+		desc = "Quit MyLazyGit",
+		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
+	},
+	{
+		lhs = "r",
+		rhs = M.refresh,
+		desc = "Refresh status",
+		explain = "Re-read the git status and update every pane: worktree, commits, branches, diff preview, and info bar.\nUseful after making changes outside MyLazyGit or when the UI feels stale.",
+	},
+	{
+		lhs = "i",
+		rhs = git_init,
+		desc = "Git init",
+		explain = "Run `git init` in the current working directory.\nCreates a new empty Git repository with a .git folder. Use this when you open MyLazyGit in a directory that is not yet a git repo.",
+	},
+
+	-- Staging
+	{
+		lhs = "gsf",
+		rhs = stage_file,
+		desc = "Stage file",
+		explain = "Opens a picker to select files one at a time for staging (git add <file>).\nKeep selecting files until you press Esc to finish. Only the selected files are staged.",
+	},
 	{
 		lhs = "gsr",
 		rhs = restore_file,
 		desc = "Restore file",
-		explain = "Restore tracked files with unstaged changes (git restore -- <file>)",
+		explain = "Discard unstaged changes for selected tracked files (git restore -- <file>).\nThis reverts the working copy to match the index. Untracked files are not affected.\nWarning: discarded changes cannot be recovered.",
 	},
 	{
 		lhs = "gsa",
 		rhs = stage_all,
 		desc = "Stage all files",
-		explain = "Stage all files at once. Same as 'git add .'",
+		explain = "Stage every change in the working tree at once (git add .).\nThis includes new, modified, and deleted files. Equivalent to running `git add .` from the repo root.",
 	},
 	{
 		lhs = "gsc",
 		rhs = stage_all_and_commit,
 		desc = "Stage all and commit",
-		explain = "This command is running 'git add .' → 'git commit -m <message>'",
+		explain = "Two-step shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and create the commit\n\nHandy for quick saves when you want to commit everything in one action.",
 	},
 	{
 		lhs = "gsC",
 		rhs = stage_all_and_commit_and_pull,
-		desc = "Stage all and commit and pull",
-		explain = "This command is running 'git add .' → 'git commit -m <message>' → 'git pull --rebase' → 'git push'",
+		desc = "Stage, commit, pull and push",
+		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the remote (git pull --rebase)\n4. Ask for confirmation, then push to the remote\n\nIdeal for solo branches where you want to sync everything in one action.",
+	},
+	{
+		lhs = "gsu",
+		rhs = unstage_file,
+		desc = "Unstage file",
+		explain = "Opens a picker to select staged files to remove from the index (git restore --staged <file>).\nThe file contents are not changed — only the staging is undone. The changes remain in your working tree.",
+	},
+	{
+		lhs = "gsU",
+		rhs = unstage_all_files,
+		desc = "Unstage all files",
+		explain = "Remove all files from the staging area at once (git restore --staged .).\nNo file contents are modified — this only undoes `git add`. Your working tree changes are preserved.",
+	},
+	{
+		lhs = "gsp",
+		rhs = git_pull_rebase,
+		desc = "Pull rebase",
+		explain = "Pull from the remote and rebase local commits on top (git pull --rebase).\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
 	},
 
-	{ lhs = "gsu", rhs = unstage_file, desc = "Unstage file", explain = "" },
-	{ lhs = "gsU", rhs = unstage_all_files, desc = "Unstage all files", explain = "" },
-	{ lhs = "gsp", rhs = git_pull_rebase, desc = "Pull rebase", explain = "Runs 'git pull --rebase'" },
-	{ lhs = "c", rhs = commit_changes, desc = "Commit", explain = "" },
+	-- Commits
+	{
+		lhs = "c",
+		rhs = commit_changes,
+		desc = "Commit",
+		explain = "Open a prompt to type a commit message, then create the commit (git commit -m <message>).\nMake sure you have staged changes first (use gsf, gsa, or Space). If nothing is staged the commit will fail.",
+	},
 	{
 		lhs = "gss",
 		rhs = squash_commits,
 		desc = "Squash commits",
-		explain = "Soft-reset to the selected commit and create a new commit with a combined message.",
+		explain = "Combine multiple recent commits into one:\n1. Select the oldest commit you want to include\n2. Edit the combined commit message\n3. A soft reset is performed and a new single commit is created\n\nUseful for cleaning up work-in-progress commits before pushing.",
+	},
+	{
+		lhs = "A",
+		rhs = amend_commit,
+		desc = "Amend commit",
+		explain = "Modify the most recent commit (git commit --amend).\nThe previous commit message is pre-filled so you can edit it or leave it as-is.\nCurrently staged changes will be folded into the amended commit.\n\nWarning: do not amend commits that have already been pushed unless you plan to force-push.",
 	},
 
+	-- Remote operations
 	{
 		lhs = "p",
 		rhs = git_pull,
 		desc = "Pull",
-		explain = "Runs git pull --rebase to avoid automatic merge commits like `Merge branch 'main' ...`.",
+		explain = "Pull changes from the remote and rebase your local commits on top (git pull --rebase).\nRebasing avoids automatic merge commits like 'Merge branch main into ...', keeping a clean linear history.\nThis is an async operation — the UI stays responsive while waiting for the network.",
 	},
 	{
 		lhs = "P",
 		rhs = git_push,
 		desc = "Push",
-		explain = "Git push will update the remote repository with the local changes",
+		explain = "Push your local commits to the remote branch (git push <remote> <branch>).\nThis is an async operation — a loading message is shown while the push completes.\nIf the remote has new commits you haven't pulled, the push will be rejected. Pull first with [p].",
 	},
 	{
 		lhs = "gPF",
 		rhs = git_push_force,
 		desc = "Push force",
-		explain = "Git push --force",
+		explain = "Force push your local branch to the remote (git push --force).\nThis overwrites the remote history with your local history.\n\nWarning: this is destructive. Commits on the remote that you don't have locally will be lost.\nOnly use this after an amend or rebase when you know the remote needs to be overwritten.",
+	},
+	{
+		lhs = "f",
+		rhs = git_fetch,
+		desc = "Fetch",
+		explain = "Download objects and refs from the remote (git fetch <remote>).\nThis updates your remote-tracking branches (e.g. origin/main) without changing your working tree or local branches.\nUseful to see what others have pushed before you merge or rebase.",
+	},
+	{
+		lhs = "gpr",
+		rhs = create_pull_request,
+		desc = "Create pull request",
+		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nThe current branch must have an upstream set (push it first with P).",
 	},
 
-	{ lhs = "f", rhs = git_fetch, desc = "Fetch", explain = "git fetch" },
-	{ lhs = "gpr", rhs = create_pull_request, desc = "Create pull request", explain = "Create a GitHub pull request using gh pr create" },
+	-- Conflicts
 	{
 		lhs = "C",
 		rhs = check_conflicts,
 		desc = "Check conflicts",
-		explain = "Runs 'git fetch' and then 'git merge-tree' to check for conflicts before merging. This is a safe way to preview potential conflicts without actually performing a merge.",
+		explain = "Preview merge conflicts without actually merging:\n1. Fetches latest changes from the remote\n2. Runs `git merge-tree` to simulate a merge\n3. Reports whether conflicts exist\n\nThis is completely safe — no files are changed, no merge is started.\nUse this before merging to see if the merge will be clean.",
 	},
 	{
 		lhs = "X",
 		rhs = resolve_conflicts,
 		desc = "Resolve conflicts",
-		explain = "Opens the 3-way conflict resolver showing local changes (right), incoming changes (left), and the result (middle). Navigate with j/k, accept changes with h (ours) or l (theirs), accept all with a/A, and save with s.",
+		explain = "Open the 3-way conflict resolver for files with merge conflicts.\n\nLayout:\n  Left pane  — Incoming changes (theirs)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Local changes (ours)\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept local (ours) for current conflict\n  h   — Accept incoming (theirs) for current conflict\n  a   — Accept all local (ours)\n  A   — Accept all incoming (theirs)\n  s   — Save the resolved file and stage it\n  q   — Quit without saving",
 	},
-	{ lhs = "R", rhs = remote_add, desc = "Add remote", explain = "git remote add origin <Url>" },
-	{ lhs = "U", rhs = remote_set_url, desc = "Set remote url", explain = "git remote set-url origin <Url>" },
+
+	-- Remotes
+	{
+		lhs = "R",
+		rhs = remote_add,
+		desc = "Add remote",
+		explain = "Register a new remote repository (git remote add <name> <url>).\nYou will be prompted for the remote name (e.g. origin) and the URL.\nAfter adding, you can push/pull from this remote.",
+	},
+	{
+		lhs = "U",
+		rhs = remote_set_url,
+		desc = "Set remote url",
+		explain = "Update the URL of an existing remote (git remote set-url <name> <url>).\nThe current URL is pre-filled for easy editing.\nUseful when a repository moves or when switching between HTTPS and SSH URLs.",
+	},
+
+	-- Branches
 	{
 		lhs = "gbn",
 		rhs = switch_new_branch,
 		desc = "New Branch",
-		explain = "git switch -c <branch-name>\nThe `git switch -c` command allows you to create a new branch and switch your working directory to it in one seamless action.",
+		explain = "Create a new branch and switch to it (git switch -c <name>).\nThe branch is created from your current HEAD position.\nThis is the recommended way to start working on a new feature or fix.",
 	},
-	{ lhs = "gbs", rhs = switch_branch, desc = "Switch branch", explain = "git switch <branch-name>" },
+	{
+		lhs = "gbs",
+		rhs = switch_branch,
+		desc = "Switch branch",
+		explain = "Switch to an existing local branch (git switch <name>).\nOpens a picker with all local branches. Your working tree must be clean or the switch may fail.\nTip: stash uncommitted changes first with [gzz] if needed.",
+	},
 	{
 		lhs = "gbR",
 		rhs = switch_remote_branch,
 		desc = "Switch remote branch",
-		explain = "Create and track a remote branch locally",
+		explain = "Create a local branch that tracks a remote branch and switch to it.\nIf the local branch already exists, it simply switches to it.\nOtherwise runs: git switch -c <branch> --track <remote/branch>\n\nUseful for checking out a colleague's branch for the first time.",
 	},
-	{ lhs = "gbd", rhs = delete_branch_safe, desc = "Delete branch", explain = "git branch -d <branch-name>" },
-	{ lhs = "gbD", rhs = delete_branch_force, desc = "Delete branch force", explain = "git branch -D <branch-name>" },
-	{ lhs = "gbm", rhs = merge_branch, desc = "Merge branch", explain = "git merge <branch-name>" },
+	{
+		lhs = "gbd",
+		rhs = delete_branch_safe,
+		desc = "Delete branch",
+		explain = "Delete a local branch safely (git branch -d <name>).\nGit will refuse to delete the branch if it has unmerged changes.\nYou cannot delete the currently checked-out branch.\nA confirmation prompt is shown before deletion.",
+	},
+	{
+		lhs = "gbD",
+		rhs = delete_branch_force,
+		desc = "Delete branch force",
+		explain = "Force-delete a local branch (git branch -D <name>).\nThis deletes the branch even if it has unmerged changes.\nA confirmation prompt is shown before deletion.\n\nWarning: any commits unique to that branch will become unreachable and may be garbage-collected.",
+	},
+	{
+		lhs = "gbm",
+		rhs = merge_branch,
+		desc = "Merge branch",
+		explain = "Merge another branch into your current branch (git merge <name>).\nOpens a picker with all local branches except the current one.\nIf there are conflicts, use [X] to open the conflict resolver.",
+	},
 	{
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Run the merge workflow (checkout main → pull → checkout branch → pull → rebase → merge)",
+		explain = "Automated multi-step merge workflow:\n1. Checkout the main branch\n2. Pull main with rebase (if upstream exists)\n3. Checkout the feature branch\n4. Pull feature with rebase (if upstream exists)\n5. Rebase feature onto main\n6. Checkout main and merge the feature branch\n\nThis ensures a clean, up-to-date merge. Configure the main branch in setup() under merge_workflow.main_branch.",
 	},
-	{ lhs = "gbr", rhs = rebase_branch, desc = "Git rebase branch", explain = "" },
-
 	{
-		lhs = "A",
-		rhs = amend_commit,
-		desc = "Amend commit",
-		explain = "Amend the last commit. You can edit the commit message or keep it unchanged.",
+		lhs = "gbr",
+		rhs = rebase_branch,
+		desc = "Rebase branch",
+		explain = "Rebase the current branch onto another branch (git rebase <target>).\nOpens a picker to choose the target branch.\nRebasing replays your commits on top of the target, resulting in a linear history.\n\nIf conflicts arise during the rebase, resolve them with [X] and then run `git rebase --continue` from the terminal.",
 	},
+
+	-- Toggle staging
 	{
 		lhs = "<Space>",
 		rhs = toggle_stage_current,
 		desc = "Toggle stage",
-		explain = "Toggle staging for the file under the cursor in the worktree pane.",
+		explain = "Toggle the staging state of the file under the cursor in the worktree pane.\nIf the file is staged, it will be unstaged. If it is unstaged or untracked, it will be staged.\nThis is the fastest way to stage/unstage individual files without opening a picker.",
 	},
 
+	-- Stash
 	{
 		lhs = "gzz",
 		rhs = stash_push,
 		desc = "Stash push",
-		explain = "Stash your working directory changes with an optional message (git stash push).",
+		explain = "Save your uncommitted changes to the stash (git stash push).\nYou can optionally provide a description message.\nStashing lets you temporarily shelve changes so you can switch branches or pull without conflicts.\nRetrieve them later with [gzp].",
 	},
 	{
 		lhs = "gzp",
 		rhs = stash_pop,
 		desc = "Stash pop",
-		explain = "Pop the most recent stash or select one to pop (git stash pop).",
+		explain = "Re-apply stashed changes and remove them from the stash (git stash pop).\nIf there is only one stash entry it is popped immediately.\nIf there are multiple entries, a picker lets you choose which one to pop.\nThe popped changes are applied to your working tree.",
 	},
 	{
 		lhs = "gzd",
 		rhs = stash_drop,
 		desc = "Stash drop",
-		explain = "Select a stash entry to drop (git stash drop).",
+		explain = "Permanently delete a stash entry (git stash drop).\nA picker lets you choose which entry to drop, followed by a confirmation prompt.\n\nWarning: dropped stash entries cannot be recovered.",
 	},
 
-	{ lhs = "[", rhs = ui.bottom_view_prev, desc = "Previous bottom pane view", explain = "" },
-	{ lhs = "]", rhs = ui.bottom_view_next, desc = "Next bottom pane view", explain = "" },
-	{ lhs = "?", rhs = show_keymap_popup, desc = "Show keymap help", explain = "" },
+	-- Navigation
+	{
+		lhs = "[",
+		rhs = ui.bottom_view_prev,
+		desc = "Previous bottom pane view",
+		explain = "Cycle the bottom-left pane to the previous view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [1/3]).",
+	},
+	{
+		lhs = "]",
+		rhs = ui.bottom_view_next,
+		desc = "Next bottom pane view",
+		explain = "Cycle the bottom-left pane to the next view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [2/3]).",
+	},
+	{
+		lhs = "?",
+		rhs = show_keymap_popup,
+		desc = "Show keymap help",
+		explain = "Open this help popup showing all available keymaps with explanations.\nNavigate with j/k to highlight a keymap and see its explanation on the right.\nPress q or Esc to close.",
+	},
 }
 
 local function set_keymaps()
