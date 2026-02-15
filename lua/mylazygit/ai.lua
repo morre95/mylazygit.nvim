@@ -26,6 +26,16 @@ local function notify(msg, level)
 	vim.notify(msg, level or vim.log.levels.INFO, { title = "MyLazyGit AI" })
 end
 
+local function emit_change(event)
+	local cb = config.on_change
+	if type(cb) ~= "function" then
+		return
+	end
+	vim.schedule(function()
+		cb(event)
+	end)
+end
+
 local function ensure_model()
 	if state.model and state.model ~= "" then
 		return state.model
@@ -203,6 +213,7 @@ local function unstage_all_after_cancel()
 	local ok = select(1, git.unstage({ "." }))
 	if ok then
 		notify("Commit cancelled. Staged changes were unstaged.", vim.log.levels.INFO)
+		emit_change("unstage")
 	else
 		notify("Commit cancelled, but failed to unstage staged changes.", vim.log.levels.WARN)
 	end
@@ -236,6 +247,7 @@ function M.generate_commit_message()
 					return
 				end
 
+				emit_change("stage")
 				notify("Changes staged. Retrying commit message generation …")
 				vim.schedule(function()
 					M.generate_commit_message()
@@ -279,6 +291,7 @@ function M.generate_commit_message()
 		local ok = select(1, git.commit(final_message))
 		if ok then
 			notify("Commit created with AI generated message")
+			emit_change("commit")
 		end
 	end)
 end

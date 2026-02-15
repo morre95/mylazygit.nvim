@@ -1792,7 +1792,16 @@ end
 
 function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
-	ai.setup(config.ai or {})
+	local user_ai_on_change = type(config.ai) == "table" and config.ai.on_change or nil
+	local ai_opts = vim.tbl_deep_extend("force", {}, config.ai or {}, {
+		on_change = function(event)
+			M.refresh()
+			if type(user_ai_on_change) == "function" then
+				user_ai_on_change(event)
+			end
+		end,
+	})
+	ai.setup(ai_opts)
 
 	if vim.fn.has("nvim-0.8") == 0 then
 		notify("MyLazyGit requires Neovim 0.8 or newer", vim.log.levels.ERROR)
