@@ -70,6 +70,7 @@ Key | Action
 `gsr` | Restore tracked files with unstaged changes (`git restore -- <file>`)
 `u` | Unstage a file
 `c` | Commit staged changes (prompts for message)
+`aic` | Generate an AI commit message from staged changes and commit (OpenRouter)
 `p` | Pull with rebase from the configured remote/branch (`git pull --rebase`)
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
@@ -88,7 +89,7 @@ Key | Action
 MyLazyGit can ask [OpenRouter](https://openrouter.ai) for concise commit messages that describe your staged diff.
 
 - Export `OPENROUTER_API_KEY` (or set `ai.api_key` in the plugin setup).
-- Run `:MyLazyGitAICommit` to stage files as usual, then let the model draft the commit message. You can edit the suggestion before it commits.
+- Press `aic` inside MyLazyGit (or run `:MyLazyGitAICommit`) to let the model draft the commit message. You can edit the suggestion before it commits.
 - Use `:MyLazyGitAISwitchModel` to swap to any other OpenRouter model id on the fly.
 
 The AI helper defaults to `meta-llama/llama-3.3-70b-instruct:free`, a low-cost instruct model that’s broadly available without relying on `:free` suffixed variants (those are limited per [OpenRouter’s free-usage limits](https://openrouter.ai/docs/api/reference/limits)). Override anything inside `ai` if you prefer a different model or tuning:

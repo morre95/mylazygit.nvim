@@ -199,6 +199,15 @@ local function split_subject_body(message)
 	end
 end
 
+local function unstage_all_after_cancel()
+	local ok = select(1, git.unstage({ "." }))
+	if ok then
+		notify("Commit cancelled. Staged changes were unstaged.", vim.log.levels.INFO)
+	else
+		notify("Commit cancelled, but failed to unstage staged changes.", vim.log.levels.WARN)
+	end
+end
+
 function M.generate_commit_message()
 	if not git.is_repo() then
 		notify("MyLazyGit AI requires a git repository", vim.log.levels.WARN)
@@ -258,7 +267,7 @@ function M.generate_commit_message()
 	}, function(input)
 		local final_subject = input and vim.trim(input) or ""
 		if final_subject == "" then
-			notify("Commit cancelled", vim.log.levels.INFO)
+			unstage_all_after_cancel()
 			return
 		end
 

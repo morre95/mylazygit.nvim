@@ -290,7 +290,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"[?]help [r]efresh [Space]toggle-stage [gsa]dd-all [c]ommit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
+				"[?]help [r]efresh [Space]toggle-stage [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -1601,6 +1601,12 @@ keymap_mappings = {
 		rhs = commit_changes,
 		desc = "Commit",
 		explain = "Open a prompt to type a commit message, then create the commit (git commit -m <message>).\nMake sure you have staged changes first (use gsf, gsa, or Space). If nothing is staged the commit will fail.",
+	},
+	{
+		lhs = "aic",
+		rhs = ai.generate_commit_message,
+		desc = "AI commit message",
+		explain = "Generate a commit message from the staged diff using OpenRouter, then let you edit it before committing.\nIf nothing is staged and there are working-tree changes, you'll be prompted to stage all changes first.",
 	},
 	{
 		lhs = "gss",
