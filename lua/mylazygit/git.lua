@@ -502,6 +502,20 @@ function M.delete_branch(name, force)
 	return system({ "branch", flag, name })
 end
 
+function M.delete_remote_branch(remote, branch)
+	remote = trim(remote or "")
+	branch = trim(branch or "")
+
+	if remote == "" then
+		return false, { "Remote name required" }
+	end
+	if branch == "" then
+		return false, { "Branch name required" }
+	end
+
+	return system({ "push", remote, "--delete", branch })
+end
+
 local function upstream_ref(remote, branch)
 	if branch and branch ~= "" then
 		local spec = string.format("%s@{upstream}", branch)
