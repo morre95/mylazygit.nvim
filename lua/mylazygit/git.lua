@@ -421,6 +421,24 @@ function M.switch_remote(remote_branch)
         return system({ "switch", "-c", branch, "--track", remote_branch })
 end
 
+function M.fetch_and_switch_remote(remote_branch)
+	if not remote_branch or remote_branch == "" then
+		return false, { "Remote branch required" }
+	end
+
+	local remote, branch = remote_branch:match("^([^/]+)/(.+)$")
+	if not remote or remote == "" or not branch or branch == "" then
+		return false, { string.format("Invalid remote branch: %s", remote_branch) }
+	end
+
+	local fetched, output = system({ "fetch", remote, branch })
+	if not fetched then
+		return false, output
+	end
+
+	return M.switch_remote(remote_branch)
+end
+
 function M.branches()
 	local ok, output = system({ "branch", "--format", "%(refname:short)" }, { silent = true })
 	if not ok then

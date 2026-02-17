@@ -997,8 +997,8 @@ local function switch_remote_branch()
 		end
 
 		run_and_refresh(function()
-			return select(1, git.switch_remote(choice))
-		end, string.format("Switched to %s", choice))
+			return select(1, git.fetch_and_switch_remote(choice))
+		end, string.format("Fetched and switched to %s", choice))
 	end)
 end
 
@@ -1732,7 +1732,7 @@ keymap_mappings = {
 		lhs = "gbR",
 		rhs = switch_remote_branch,
 		desc = "Switch remote branch",
-		explain = "Create a local branch that tracks a remote branch and switch to it.\nIf the local branch already exists, it simply switches to it.\nOtherwise runs: git switch -c <branch> --track <remote/branch>\n\nUseful for checking out a colleague's branch for the first time.",
+		explain = "Fetch a remote branch, then create/switch to a local tracking branch.\nRuns fetch first (git fetch <remote> <branch>) so your remote-tracking ref is up to date.\nIf the local branch already exists, it simply switches to it.\nOtherwise runs: git switch -c <branch> --track <remote/branch>\n\nUseful for checking out a colleague's branch for the first time.",
 	},
 	{
 		lhs = "gbd",
