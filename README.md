@@ -77,7 +77,7 @@ Key | Action
 `gpr` | Create a GitHub pull request (prompts for title/base/body; requires `gh`)
 `n` | Create and switch to a new branch (`git switch -c`)
 `b` | Switch to an existing branch (picker)
-`gbR` | Select and switch to a remote branch (creates a local tracking branch)
+`gbR` | Fetch and switch to a remote branch (creates a local tracking branch)
 `R` | Run `git remote add` (prompts for name + URL)
 `U` | Run `git remote set-url` (prompts for name + URL)
 `i` | Run `git init`
