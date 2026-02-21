@@ -375,9 +375,23 @@ local function is_in_merge()
   return vim.fn.filereadable(output[1]) == 1
 end
 
-local function run_git(args, on_success, on_failure)
+local function is_selected(choice, label)
+  if choice == label or choice == 1 then
+    return true
+  end
+  if type(choice) == "table" then
+    if choice[1] == label or choice.label == label or choice.text == label then
+      return true
+    end
+  end
+  return false
+end
+
+local function run_git(args, opts, on_success, on_failure)
+  opts = opts or {}
+
   if vim.system then
-    vim.system(vim.list_extend({ "git" }, args), { text = true }, function(res)
+    vim.system(vim.list_extend({ "git" }, args), { text = true, env = opts.env }, function(res)
       vim.schedule(function()
         if res.code == 0 then
           if on_success then
@@ -398,7 +412,22 @@ local function run_git(args, on_success, on_failure)
     return
   end
 
+  local old_env = {}
+  if opts.env then
+    for key, value in pairs(opts.env) do
+      old_env[key] = vim.env[key]
+      vim.env[key] = value
+    end
+  end
+
   local ok, output = pcall(vim.fn.systemlist, vim.list_extend({ "git" }, args))
+
+  if opts.env then
+    for key, value in pairs(old_env) do
+      vim.env[key] = value
+    end
+  end
+
   if ok and vim.v.shell_error == 0 then
     if on_success then
       on_success()
@@ -413,11 +442,11 @@ local function prompt_post_resolve(in_rebase, in_merge)
     vim.ui.select({ "Continue", "Stop here" }, {
       prompt = "File resolved and staged. Continue rebase?",
     }, function(choice)
-      if choice ~= "Continue" then
+      if not is_selected(choice, "Continue") then
         return
       end
       vim.notify("Continuing rebase...", vim.log.levels.INFO)
-      run_git({ "rebase", "--continue" }, function()
+      run_git({ "rebase", "--continue" }, { env = { GIT_EDITOR = "true" } }, function()
         vim.notify("Rebase continued successfully", vim.log.levels.INFO)
       end, function(output)
         vim.notify("Rebase continue failed:\n" .. table.concat(output, "\n"), vim.log.levels.ERROR)
@@ -427,11 +456,11 @@ local function prompt_post_resolve(in_rebase, in_merge)
     vim.ui.select({ "Commit", "Stop here" }, {
       prompt = "File resolved and staged. Commit the merge?",
     }, function(choice)
-      if choice ~= "Commit" then
+      if not is_selected(choice, "Commit") then
         return
       end
       vim.notify("Committing merge...", vim.log.levels.INFO)
-      run_git({ "commit", "--no-edit" }, function()
+      run_git({ "commit", "--no-edit" }, nil, function()
         vim.notify("Merge committed successfully", vim.log.levels.INFO)
       end, function(output)
         vim.notify("Merge commit failed:\n" .. table.concat(output, "\n"), vim.log.levels.ERROR)
