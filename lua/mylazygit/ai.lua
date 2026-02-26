@@ -72,7 +72,16 @@ local function get_api_key()
 	return key
 end
 
-local function encode_messages(diff_text)
+local function encode_messages(diff_text, strict_plain_text)
+	local user_prompt = string.format(
+		"Generate a commit message describing these staged changes:\n\n%s\n\nOnly answer with the commit message.",
+		diff_text
+	)
+	if strict_plain_text then
+		user_prompt = user_prompt
+			.. "\nReturn plain text only. Do not use markdown, code fences, or backticks."
+	end
+
 	local payload = {
 		model = ensure_model(),
 		temperature = config.temperature,
@@ -88,10 +97,7 @@ local function encode_messages(diff_text)
 			},
 			{
 				role = "user",
-				content = string.format(
-					"Generate a commit message describing these staged changes:\n\n%s\n\nOnly answer with the commit message.",
-					diff_text
-				),
+				content = user_prompt,
 			},
 		},
 	}
@@ -161,13 +167,13 @@ local function sanitize_message(message)
 	return vim.trim(text)
 end
 
-local function call_openrouter(diff_text)
+local function call_openrouter(diff_text, strict_plain_text)
 	local api_key = get_api_key()
 	if not api_key then
 		return nil, "Set OPENROUTER_API_KEY or configure mylazygit.ai.api_key"
 	end
 
-	local payload, encode_err = encode_messages(diff_text)
+	local payload, encode_err = encode_messages(diff_text, strict_plain_text)
 	if not payload then
 		return nil, encode_err
 	end
@@ -289,8 +295,18 @@ function M.generate_commit_message()
 
 	local subject, body = split_subject_body(message)
 	if subject == "" then
-		notify("OpenRouter returned an empty commit suggestion", vim.log.levels.WARN)
-		return
+		notify("AI output was empty/invalid. Retrying with stricter formatting …", vim.log.levels.WARN)
+		local retry_message, retry_err = call_openrouter(diff_text, true)
+		if not retry_message then
+			notify("OpenRouter retry failed: " .. retry_err, vim.log.levels.ERROR)
+			return
+		end
+
+		subject, body = split_subject_body(retry_message)
+		if subject == "" then
+			notify("OpenRouter returned an empty commit suggestion", vim.log.levels.WARN)
+			return
+		end
 	end
 
 	vim.ui.input({
