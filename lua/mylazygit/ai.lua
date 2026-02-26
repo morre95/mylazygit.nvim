@@ -145,6 +145,22 @@ local function decode_message(body)
 	return nil, "OpenRouter response contained no text"
 end
 
+local function sanitize_message(message)
+	local text = vim.trim(message or "")
+	if text == "" then
+		return text
+	end
+
+	-- Drop markdown code fences some models prepend/append around plain text answers.
+	text = text:gsub("^```[%w_-]*%s*\n", "")
+	text = text:gsub("\n```%s*$", "")
+	text = text:gsub("^```%s*\n", "")
+	text = text:gsub("^```%s*$", "")
+	text = text:gsub("\n```%s*$", "")
+
+	return vim.trim(text)
+end
+
 local function call_openrouter(diff_text)
 	local api_key = get_api_key()
 	if not api_key then
@@ -196,9 +212,13 @@ local function call_openrouter(diff_text)
 end
 
 local function split_subject_body(message)
-	local trimmed = vim.trim(message or "")
+	local trimmed = sanitize_message(message)
 	if trimmed == "" then
 		return trimmed, nil
+	end
+
+	if trimmed == "```" then
+		return "", nil
 	end
 
 	local subject, body = trimmed:match("([^\n]+)%s*\n+(.+)")
