@@ -11,6 +11,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Run `git init`, `git pull --rebase`, `git push`, and `git fetch` against a configurable remote
 - Create GitHub pull requests from inside Neovim via `gh pr create`
 - One-key merge workflow that rebases a feature branch on main before merging it back
+- Temporary detached-checkout of selected commits (`gct`) with quick return (`gcr`) for commit-by-commit inspection
 - Refresh view at any time to keep the status in sync
 
 ## Installation
@@ -71,6 +72,8 @@ Key | Action
 `u` | Unstage a file
 `c` | Commit staged changes (prompts for message)
 `aic` | Generate an AI commit message from staged changes and commit (OpenRouter)
+`gct` | Temporarily detach and checkout the selected commit in the Commits pane
+`gcr` | Return to the branch/commit you were on before temporary checkout
 `p` | Pull with rebase from the configured remote/branch (`git pull --rebase`)
 `P` | Push to the configured remote/branch
 `f` | Fetch the configured remote
@@ -111,7 +114,7 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 ## Notes
 
 - All git operations happen in the current working directory of Neovim. Change directories (`:cd`, `:lcd`, or via your file tree) before launching if needed.
-- Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the `branch_fallback` option is used instead.
+- Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the UI now shows a clear detached warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).

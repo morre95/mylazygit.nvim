@@ -23,7 +23,11 @@ local config = {
 
 local state = {
 	status = {},
+	commits = {},
 	active_bottom_view = "local_branches",
+	temp_checkout = {
+		return_ref = nil,
+	},
 }
 
 local bottom_view_names = {
@@ -290,7 +294,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"[?]help [r]efresh [Space]toggle-stage [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
+				"[?]help [r]efresh [Space]toggle-stage [gct]temp-checkout [gcr]return [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -319,10 +323,16 @@ function M.refresh()
 	state.status = git.parse_status()
 
 	local branch = git.current_branch()
+	local detached_head = branch == nil
+	local head_short = detached_head and git.current_head_short() or nil
 	if branch then
 		layout.info.branch = string.format("Branch: %s", branch)
 	else
-		layout.info.branch = string.format("Branch: detached HEAD (fallback: %s)", config.branch_fallback)
+		layout.info.branch = string.format(
+			"Branch: DETACHED HEAD at %s (fallback: %s)",
+			head_short or "unknown",
+			config.branch_fallback
+		)
 	end
 
 	local staged, unstaged, untracked = 0, 0, 0
@@ -392,6 +402,14 @@ function M.refresh()
 		),
 	}
 
+	if detached_head then
+		table.insert(layout.info.details, "⚠ Detached HEAD: commits here are not on a branch unless you create one.")
+	end
+
+	if state.temp_checkout.return_ref then
+		table.insert(layout.info.details, string.format("Temporary checkout active · [gcr] returns to %s", state.temp_checkout.return_ref))
+	end
+
 	local local_branches = git.branches()
 	local local_branch_lines = {}
 
@@ -452,6 +470,7 @@ function M.refresh()
 	layout.commits.lines = commit_lines
 	layout.commits.highlights = commit_highlights
 	layout.commits.items = log_lines
+	state.commits = log_lines
 
 	local diff_args = config.diff_args or {}
 	local diff_label = (#diff_args > 0) and ("git diff " .. table.concat(diff_args, " ")) or "git diff"
@@ -1435,6 +1454,57 @@ local function amend_commit()
 	end)
 end
 
+local function remember_return_ref()
+	if state.temp_checkout.return_ref then
+		return
+	end
+	local branch = git.current_branch()
+	if branch then
+		state.temp_checkout.return_ref = branch
+		return
+	end
+	state.temp_checkout.return_ref = git.current_head_short()
+end
+
+local function temporary_checkout_commit()
+	if not repo_required() then
+		return
+	end
+
+	local line = ui.get_current_commit_line()
+	local entry = line and state.commits[line] or nil
+	if not entry or not entry.hash then
+		notify("Select a commit in the Commits pane first", vim.log.levels.WARN)
+		return
+	end
+
+	remember_return_ref()
+
+	run_and_refresh(function()
+		return select(1, git.checkout_detached(entry.hash))
+	end, string.format("Temporarily checked out %s (detached HEAD)", entry.hash))
+end
+
+local function return_from_temporary_checkout()
+	if not repo_required() then
+		return
+	end
+
+	local return_ref = state.temp_checkout.return_ref
+	if not return_ref then
+		notify("No temporary checkout return point recorded", vim.log.levels.INFO)
+		return
+	end
+
+	run_and_refresh(function()
+		local ok = select(1, git.checkout(return_ref))
+		if ok then
+			state.temp_checkout.return_ref = nil
+		end
+		return ok
+	end, string.format("Returned to %s", return_ref))
+end
+
 local function toggle_stage_current()
 	if not repo_required() then
 		return
@@ -1647,6 +1717,18 @@ keymap_mappings = {
 		rhs = squash_commits,
 		desc = "Squash commits",
 		explain = "Combine multiple recent commits into one:\n1. Select the oldest commit you want to include\n2. Edit the combined commit message\n3. A soft reset is performed and a new single commit is created\n\nUseful for cleaning up work-in-progress commits before pushing.",
+	},
+	{
+		lhs = "gct",
+		rhs = temporary_checkout_commit,
+		desc = "Temporary checkout commit",
+		explain = "Detach HEAD at the commit under the cursor in the Commits pane (git checkout --detach <hash>).\nUse this to step through commits one-by-one with live preview updates while moving in the list.\nYour original location is remembered so you can quickly return with [gcr].",
+	},
+	{
+		lhs = "gcr",
+		rhs = return_from_temporary_checkout,
+		desc = "Return from temp checkout",
+		explain = "Return to where you were before starting temporary commit checkout.\nIf you started from a branch, this switches back to that branch.\nIf you started detached, it returns to the previously recorded commit hash.",
 	},
 	{
 		lhs = "A",
