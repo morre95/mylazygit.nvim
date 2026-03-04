@@ -881,6 +881,10 @@ function M.get_current_worktree_line()
 	return state.current_worktree_line
 end
 
+function M.get_current_commit_line()
+	return state.current_commit_line
+end
+
 function M.show_preview(lines, opts)
 	local section = state.sections.preview
 	if not section then

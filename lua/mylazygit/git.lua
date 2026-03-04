@@ -400,6 +400,20 @@ function M.switch(branch)
         return system({ "switch", branch })
 end
 
+function M.checkout_detached(ref)
+	if not ref or ref == "" then
+		return false, { "Commit/reference required for detached checkout" }
+	end
+	return system({ "checkout", "--detach", ref })
+end
+
+function M.checkout(ref)
+	if not ref or ref == "" then
+		return false, { "Commit/reference required for checkout" }
+	end
+	return system({ "checkout", ref })
+end
+
 function M.switch_create(branch)
         return system({ "switch", "-c", branch })
 end
@@ -666,6 +680,18 @@ function M.current_branch()
 		return nil
 	end
 	return branch
+end
+
+function M.current_head_short()
+	local ok, output = system({ "rev-parse", "--short", "HEAD" }, { silent = true })
+	if not ok or not output[1] then
+		return nil
+	end
+	local head = trim(output[1])
+	if head == "" then
+		return nil
+	end
+	return head
 end
 
 function M.parse_status()
