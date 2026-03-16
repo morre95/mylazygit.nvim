@@ -294,7 +294,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"[?]help [r]efresh [Space]toggle-stage [gct]temp-checkout [gcr]return [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [C]onflicts [q]uit",
+				"[?]help [r]efresh [Space]toggle-stage [gct]temp-checkout [gcr]return [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [ghr]repo [C]onflicts [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -827,6 +827,48 @@ local function git_fetch()
 	run_async_and_refresh(function(cb)
 		git.fetch_async(config.remote, cb)
 	end, string.format("Fetched %s", config.remote))
+end
+
+local function create_github_repo()
+	if not repo_required() then
+		return
+	end
+
+	if git.remote_get_url(config.remote) then
+		local confirm_existing = vim.fn.confirm(
+			string.format("Remote '%s' already exists. Continue and let gh update it?", config.remote),
+			"&Yes\n&No",
+			2
+		)
+		if confirm_existing ~= 1 then
+			notify("GitHub repo creation cancelled", vim.log.levels.INFO)
+			return
+		end
+	end
+
+	helpers.centered_dual_input({
+		title = "Create GitHub Repo",
+		prompt1 = "Repository (optional: owner/name)",
+		prompt2 = "Visibility (private/public)",
+		default1 = "",
+		default2 = "private",
+	}, function(repo_name, visibility)
+		repo_name = repo_name and vim.trim(repo_name) or ""
+		visibility = visibility and vim.trim(visibility:lower()) or "private"
+
+		if visibility ~= "private" and visibility ~= "public" then
+			notify("Visibility must be 'private' or 'public'", vim.log.levels.WARN)
+			return
+		end
+
+		run_async_and_refresh(function(cb)
+			git.create_github_repo_async({
+				repo_name = repo_name ~= "" and repo_name or nil,
+				visibility = visibility,
+				remote = config.remote,
+			}, cb)
+		end, string.format("Created %s GitHub repo and pushed", visibility))
+	end)
 end
 
 local function create_pull_request()
@@ -1767,6 +1809,12 @@ keymap_mappings = {
 		rhs = create_pull_request,
 		desc = "Create pull request",
 		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nThe current branch must have an upstream set (push it first with P).",
+	},
+	{
+		lhs = "ghr",
+		rhs = create_github_repo,
+		desc = "Create GitHub repo",
+		explain = "Create a new GitHub repository from the current local repo using `gh repo create --source . --push`.\nYou can choose visibility (private/public) and optionally provide an explicit repo name (`owner/name`).\nThe configured remote name is used (default: origin).\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).",
 	},
 
 	-- Conflicts

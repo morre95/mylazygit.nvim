@@ -280,6 +280,45 @@ function M.create_pull_request_async(opts, callback)
 	}, callback)
 end
 
+function M.create_github_repo_async(opts, callback)
+	opts = opts or {}
+
+	if vim.fn.executable("gh") ~= 1 then
+		callback(false, {
+			"GitHub CLI (`gh`) is not installed or not available in $PATH.",
+			"Install from https://cli.github.com and run `gh auth login`.",
+		})
+		return
+	end
+
+	local visibility = trim(opts.visibility or "private")
+	if visibility ~= "private" and visibility ~= "public" then
+		callback(false, { "Repository visibility must be `private` or `public`" })
+		return
+	end
+
+	local remote = trim(opts.remote or "origin")
+	local args = {
+		"repo",
+		"create",
+		"--source",
+		".",
+		"--remote",
+		remote,
+		"--push",
+		string.format("--%s", visibility),
+	}
+
+	local repo_name = trim(opts.repo_name or "")
+	if repo_name ~= "" then
+		table.insert(args, 3, repo_name)
+	end
+
+	system_external_async("gh", args, {
+		loading_msg = string.format("Creating %s GitHub repository...", visibility),
+	}, callback)
+end
+
 function M.merge(branch)
 	if not branch or branch == "" then
 		return false, { "Branch name required for merge" }
