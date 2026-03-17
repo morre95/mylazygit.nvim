@@ -389,16 +389,23 @@ function M.pr_head_branch(branch, remote)
 		return nil
 	end
 
+	local target_remote = remote or "origin"
 	local upstream = M.branch_upstream(branch)
 	if upstream and upstream.branch and upstream.branch ~= "" then
-		return upstream.branch
+		if upstream.branch == branch then
+			return branch
+		end
+
+		if upstream.remote == target_remote and M.has_remote_branch(target_remote, branch) then
+			return branch
+		end
 	end
 
-	if M.has_remote_branch(remote or "origin", branch) then
+	if M.has_remote_branch(target_remote, branch) then
 		return branch
 	end
 
-	if M.remote_branch_exists(remote or "origin", branch) then
+	if M.remote_branch_exists(target_remote, branch) then
 		return branch
 	end
 
