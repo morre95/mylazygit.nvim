@@ -882,60 +882,96 @@ local function create_pull_request()
 		return
 	end
 
+	local function prompt_pr_form(pr_head)
+		local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
+
+		helpers.centered_dual_input({
+			title = "Create Pull Request",
+			prompt1 = "Title",
+			prompt2 = "Base",
+			default1 = string.format("%s", current_branch),
+			default2 = base_branch or "main",
+		}, function(title, base)
+			title = title and vim.trim(title) or ""
+			base = base and vim.trim(base) or ""
+
+			if title == "" then
+				notify("PR title is required", vim.log.levels.WARN)
+				return
+			end
+
+			if base ~= "" and base == current_branch then
+				notify("Base branch cannot be the same as the current branch", vim.log.levels.WARN)
+				return
+			end
+
+			if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(config.remote, base) then
+				notify(
+					string.format("Base branch '%s' was not found locally or on %s", base, config.remote),
+					vim.log.levels.WARN
+				)
+				return
+			end
+
+			vim.ui.input({ prompt = "PR body (optional): " }, function(body)
+				body = body or ""
+				run_async_and_refresh(function(cb)
+					git.create_pull_request_async({
+						title = title,
+						body = body,
+						base = base ~= "" and base or nil,
+						head = pr_head,
+					}, cb)
+				end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
+			end)
+		end)
+	end
+
 	local pr_head = git.pr_head_branch(current_branch, config.remote)
-	if not pr_head then
-		notify(
-			string.format(
-				"Current branch '%s' is not available on remote '%s'. Push it first (keymap: P) and retry gpr.",
-				current_branch,
-				config.remote
-			),
-			vim.log.levels.WARN
-		)
+	if pr_head then
+		prompt_pr_form(pr_head)
 		return
 	end
 
-	local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
+	local push_confirm = vim.fn.confirm(
+		string.format(
+			"Current branch '%s' has no upstream / remote branch. Push it to '%s' now?",
+			current_branch,
+			config.remote
+		),
+		"&Push and continue\n&Cancel",
+		1
+	)
 
-	helpers.centered_dual_input({
-		title = "Create Pull Request",
-		prompt1 = "Title",
-		prompt2 = "Base",
-		default1 = string.format("%s", current_branch),
-		default2 = base_branch or "main",
-	}, function(title, base)
-		title = title and vim.trim(title) or ""
-		base = base and vim.trim(base) or ""
+	if push_confirm ~= 1 then
+		notify("PR creation cancelled", vim.log.levels.INFO)
+		return
+	end
 
-		if title == "" then
-			notify("PR title is required", vim.log.levels.WARN)
+	git.push_set_upstream_async(config.remote, current_branch, function(ok)
+		if ok then
+			notify(string.format("Pushed %s to %s and set upstream", current_branch, config.remote))
+			M.refresh()
+		end
+
+		if not ok then
 			return
 		end
 
-		if base ~= "" and base == current_branch then
-			notify("Base branch cannot be the same as the current branch", vim.log.levels.WARN)
-			return
-		end
-
-		if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(config.remote, base) then
+		local refreshed_pr_head = git.pr_head_branch(current_branch, config.remote)
+		if not refreshed_pr_head then
 			notify(
-				string.format("Base branch '%s' was not found locally or on %s", base, config.remote),
+				string.format(
+					"Current branch '%s' is still not available on remote '%s'. Please verify push/auth and retry gpr.",
+					current_branch,
+					config.remote
+				),
 				vim.log.levels.WARN
 			)
 			return
 		end
 
-		vim.ui.input({ prompt = "PR body (optional): " }, function(body)
-			body = body or ""
-			run_async_and_refresh(function(cb)
-				git.create_pull_request_async({
-					title = title,
-					body = body,
-					base = base ~= "" and base or nil,
-					head = pr_head,
-				}, cb)
-			end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
-		end)
+		prompt_pr_form(refreshed_pr_head)
 	end)
 end
 
@@ -1809,7 +1845,7 @@ keymap_mappings = {
 		lhs = "gpr",
 		rhs = create_pull_request,
 		desc = "Create pull request",
-		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nThe current branch must have an upstream set (push it first with P).",
+		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nIf the current branch is not pushed yet, you will be prompted to push it before creating the PR.",
 	},
 	{
 		lhs = "ghr",

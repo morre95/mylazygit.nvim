@@ -229,6 +229,12 @@ function M.push_async(remote, branch, callback)
 	}, callback)
 end
 
+function M.push_set_upstream_async(remote, branch, callback)
+	system_async({ "push", "-u", remote, branch }, {
+		loading_msg = string.format("Pushing (set upstream) to %s/%s...", remote or "origin", branch or ""),
+	}, callback)
+end
+
 function M.push_force_async(remote, branch, callback)
 	system_async({ "push", remote, branch, "--force" }, {
 		loading_msg = string.format("Force pushing to %s/%s...", remote or "origin", branch or ""),
@@ -379,6 +385,10 @@ function M.pr_head_branch(branch, remote)
 	end
 
 	if M.has_remote_branch(remote or "origin", branch) then
+		return branch
+	end
+
+	if M.remote_branch_exists(remote or "origin", branch) then
 		return branch
 	end
 
@@ -553,6 +563,24 @@ function M.has_remote_branch(remote, branch)
 	end
 	local ref = string.format("refs/remotes/%s/%s", remote, branch)
 	return select(1, system({ "show-ref", "--verify", ref }, { silent = true }))
+end
+
+function M.remote_branch_exists(remote, branch)
+	remote = trim(remote or "")
+	branch = trim(branch or "")
+	if remote == "" or branch == "" then
+		return false
+	end
+
+	local ok = select(1, system({
+		"ls-remote",
+		"--exit-code",
+		"--heads",
+		remote,
+		string.format("refs/heads/%s", branch),
+	}, { silent = true }))
+
+	return ok
 end
 
 function M.remote_add(name, url)
