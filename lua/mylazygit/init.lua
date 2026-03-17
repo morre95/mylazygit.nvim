@@ -882,12 +882,13 @@ local function create_pull_request()
 		return
 	end
 
-	local upstream = git.branch_upstream(current_branch)
-	if not upstream then
+	local pr_head = git.pr_head_branch(current_branch, config.remote)
+	if not pr_head then
 		notify(
 			string.format(
-				"Current branch '%s' has no upstream. Push it first (keymap: P) and retry gpr.",
-				current_branch
+				"Current branch '%s' is not available on remote '%s'. Push it first (keymap: P) and retry gpr.",
+				current_branch,
+				config.remote
 			),
 			vim.log.levels.WARN
 		)
@@ -931,7 +932,7 @@ local function create_pull_request()
 					title = title,
 					body = body,
 					base = base ~= "" and base or nil,
-					head = upstream.branch,
+					head = pr_head,
 				}, cb)
 			end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
 		end)

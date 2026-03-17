@@ -368,6 +368,23 @@ function M.branch_upstream(branch)
 	return { remote = remote, branch = upstream_branch }
 end
 
+function M.pr_head_branch(branch, remote)
+	if not branch or branch == "" then
+		return nil
+	end
+
+	local upstream = M.branch_upstream(branch)
+	if upstream and upstream.branch and upstream.branch ~= "" then
+		return upstream.branch
+	end
+
+	if M.has_remote_branch(remote or "origin", branch) then
+		return branch
+	end
+
+	return nil
+end
+
 function M.merge_workflow(opts)
 	opts = opts or {}
 	local main_branch = opts.main_branch
