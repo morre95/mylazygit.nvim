@@ -14,6 +14,16 @@ local function normalize(args)
 	return cleaned
 end
 
+local function normalize_external(args)
+	local cleaned = {}
+	for _, value in ipairs(args) do
+		if value ~= nil then
+			table.insert(cleaned, value)
+		end
+	end
+	return cleaned
+end
+
 local function system(args, opts)
 	opts = opts or {}
 	local cmd = { "git" }
@@ -31,7 +41,7 @@ end
 local function system_external(bin, args, opts)
 	opts = opts or {}
 	local cmd = { bin }
-	vim.list_extend(cmd, normalize(args or {}))
+	vim.list_extend(cmd, normalize_external(args or {}))
 
 	local output = vim.fn.systemlist(cmd)
 	local ok = vim.v.shell_error == 0
@@ -92,7 +102,7 @@ local function system_external_async(bin, args, opts, callback)
 	end
 
 	local cmd = { bin }
-	vim.list_extend(cmd, normalize(args or {}))
+	vim.list_extend(cmd, normalize_external(args or {}))
 
 	if opts.loading_msg then
 		vim.notify(opts.loading_msg, vim.log.levels.INFO, { title = "MyLazyGit" })
