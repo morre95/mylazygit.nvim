@@ -64,30 +64,74 @@ vim.keymap.set('n', '<leader>lg', '<cmd>MyLazyGit<cr>', { desc = 'Open MyLazyGit
 
 ## In-app key bindings
 
+### Main MyLazyGit window
+
 Key | Action
 --- | ---
-`r` | Refresh the status view
-`s` | Stage files (multi-select; keep choosing until you press Esc)
-`a` | Stage everything (`git add .`)
-`gsr` | Restore tracked files with unstaged changes (`git restore -- <file>`)
-`u` | Unstage a file
-`c` | Commit staged changes (prompts for message)
-`aic` | Generate an AI commit message from staged changes and commit (OpenRouter)
-`gct` | Temporarily detach and checkout the selected commit in the Commits pane
-`gcr` | Return to the branch/commit you were on before temporary checkout
-`p` | Pull with rebase from the configured remote/branch (`git pull --rebase`)
-`P` | Push to the configured remote/branch
-`f` | Fetch the configured remote
-`gpr` | Create a GitHub pull request (prompts for title/base/body; requires `gh`)
-`ghr` | Create a GitHub repo from current local repo (prompts for optional `owner/name` and `private/public`; requires `gh`)
-`n` | Create and switch to a new branch (`git switch -c`)
-`b` | Switch to an existing branch (picker)
-`gbR` | Fetch and switch to a remote branch (creates a local tracking branch)
-`R` | Run `git remote add` (prompts for name + URL)
-`U` | Run `git remote set-url` (prompts for name + URL)
+`q` / `<Esc>` | Close the MyLazyGit window
+`r` | Refresh all panes (`git status`, log, branches, diff)
+`?` | Open in-app keymap help popup
 `i` | Run `git init`
-`w` | Run the merge workflow (`checkout main` → `pull --rebase` → `checkout branch` → `pull --rebase` → `rebase` → `merge`)
-`q` | Close the window
+`<Space>` | Toggle stage/unstage for the file under cursor
+`[` / `]` | Cycle bottom pane view (local branches / remote branches / diff preview)
+`gsf` | Stage selected files (`git add <file>`)
+`gsr` | Restore selected tracked files (`git restore -- <file>`)
+`gsR` | Restore all tracked files (destructive)
+`gsa` | Stage everything (`git add .`)
+`gsc` | Stage all + commit
+`gsC` | Stage all + commit + pull rebase + optional push
+`gsu` | Unstage selected files (`git restore --staged <file>`)
+`gsU` | Unstage everything (`git restore --staged .`)
+`gsp` | Pull with rebase (same behavior as `p`)
+`c` | Commit staged changes
+`aic` | Generate AI commit message from staged diff and commit (OpenRouter)
+`A` | Amend latest commit (`git commit --amend`)
+`gss` | Squash a range of recent commits into one
+`gct` | Temporarily detach and checkout selected commit
+`gcr` | Return to branch/commit from temporary checkout
+`p` | Pull with rebase from configured remote/branch (`git pull --rebase`)
+`P` | Push current branch (`git push`)
+`gPF` | Force push current branch (`git push --force`)
+`f` | Fetch configured remote
+`gpr` | Create GitHub pull request via `gh pr create`
+`ghr` | Create GitHub repo via `gh repo create --source . --push`
+`C` | Check merge conflicts with `git merge-tree` simulation
+`X` | Open 3-way conflict resolver for conflicted files
+`R` | Add remote (`git remote add`)
+`U` | Update remote URL (`git remote set-url`)
+`gbn` | Create and switch to a new branch (`git switch -c`)
+`gbs` | Switch to an existing local branch
+`gbR` | Fetch and switch to a remote branch (create tracking branch)
+`gbd` | Delete local branch safely (`git branch -d`)
+`gbD` | Force delete local branch (`git branch -D`)
+`gbx` | Delete remote branch (`git push <remote> --delete <branch>`)
+`gbm` | Merge selected local branch into current branch
+`gbw` | Run merge workflow helper (sync/rebase/merge flow)
+`gbr` | Rebase current branch onto selected branch
+`gzz` | Stash push
+`gzp` | Stash pop
+`gzd` | Stash drop
+
+### Conflict resolver (`X`) key bindings
+
+Key | Action
+--- | ---
+`j` / `k` | Next/previous conflict
+`l` | Accept local change (ours) for current conflict
+`h` | Accept incoming change (theirs) for current conflict
+`a` | Accept all local changes
+`A` | Accept all incoming changes
+`f` | Select a different conflicted file
+`s` | Save resolved file and stage it
+`q` / `<Esc>` | Quit resolver without saving
+
+### Pane navigation key bindings (main window)
+
+Key | Action
+--- | ---
+`<Tab>` / `<S-Tab>` | Move focus between panes
+`<C-h>` | Jump back to previous pane focus
+`<C-l>` | Jump to preview pane
 
 ## AI-generated commit messages
 
@@ -97,7 +141,7 @@ MyLazyGit can ask [OpenRouter](https://openrouter.ai) for concise commit message
 - Press `aic` inside MyLazyGit (or run `:MyLazyGitAICommit`) to let the model draft the commit message. You can edit the suggestion before it commits.
 - Use `:MyLazyGitAISwitchModel` to swap to any other OpenRouter model id on the fly.
 
-The AI helper defaults to `meta-llama/llama-3.3-70b-instruct:free`, a low-cost instruct model that’s broadly available without relying on `:free` suffixed variants (those are limited per [OpenRouter’s free-usage limits](https://openrouter.ai/docs/api/reference/limits)). Override anything inside `ai` if you prefer a different model or tuning:
+The AI helper defaults to `google/gemini-2.5-flash-lite`. Override anything inside `ai` if you prefer a different model or tuning:
 
 ```lua
 require('mylazygit').setup({
