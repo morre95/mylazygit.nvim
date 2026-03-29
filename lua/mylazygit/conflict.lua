@@ -293,7 +293,7 @@ local function render()
   local info_lines = {
     string.format("Conflict %d/%d %s � File: %s", state.current_conflict_idx, total, status, state.file_path),
     string.format(
-      "Resolved: %d/%d � [l]ours [h]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [s]ave [q]uit",
+      "Resolved: %d/%d � [l]ours [h]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [f]iles [s]ave [q]uit",
       resolved_count,
       total
     ),
@@ -469,6 +469,51 @@ local function prompt_post_resolve(in_rebase, in_merge)
   end
 end
 
+local function select_conflicted_file()
+  local conflicted_files = M.get_conflicted_files()
+  if vim.tbl_isempty(conflicted_files) then
+    vim.notify("No conflicted files found", vim.log.levels.INFO)
+    return
+  end
+
+  vim.ui.select(conflicted_files, {
+    prompt = string.format("Select conflicted file (%d files)", #conflicted_files),
+  }, function(choice)
+    if not choice then
+      return
+    end
+    if choice == state.file_path then
+      return
+    end
+
+    M.close()
+    vim.schedule(function()
+      M.open(choice)
+    end)
+  end)
+end
+
+local function prompt_next_conflicted_file(in_rebase, in_merge)
+  local conflicted_files = M.get_conflicted_files()
+  if vim.tbl_isempty(conflicted_files) then
+    prompt_post_resolve(in_rebase, in_merge)
+    return
+  end
+
+  local options = { "Stop here" }
+  vim.list_extend(options, conflicted_files)
+
+  vim.ui.select(options, {
+    prompt = string.format("Select next conflicted file (%d remaining)", #conflicted_files),
+  }, function(choice)
+    if not choice or choice == "Stop here" then
+      vim.notify("You can resume conflict resolution with [X]", vim.log.levels.INFO)
+      return
+    end
+    M.open(choice)
+  end)
+end
+
 -- Save the resolved file
 local function save_and_close()
   -- Check if all conflicts are resolved
@@ -516,7 +561,7 @@ local function save_and_close()
 
   M.close()
   vim.schedule(function()
-    prompt_post_resolve(in_rebase, in_merge)
+    prompt_next_conflicted_file(in_rebase, in_merge)
   end)
 end
 
@@ -555,6 +600,7 @@ local function setup_keymaps()
     vim.keymap.set("n", "h", accept_theirs, { buffer = buf, silent = true, desc = "Accept incoming (theirs)" })
     vim.keymap.set("n", "a", accept_all_ours, { buffer = buf, silent = true, desc = "Accept all local" })
     vim.keymap.set("n", "A", accept_all_theirs, { buffer = buf, silent = true, desc = "Accept all incoming" })
+    vim.keymap.set("n", "f", select_conflicted_file, { buffer = buf, silent = true, desc = "Select conflicted file" })
     vim.keymap.set("n", "s", save_and_close, { buffer = buf, silent = true, desc = "Save and close" })
     vim.keymap.set("n", "q", M.close, { buffer = buf, silent = true, desc = "Quit without saving" })
     vim.keymap.set("n", "<Esc>", M.close, { buffer = buf, silent = true, desc = "Quit without saving" })

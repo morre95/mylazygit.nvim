@@ -1865,7 +1865,7 @@ keymap_mappings = {
 		lhs = "X",
 		rhs = resolve_conflicts,
 		desc = "Resolve conflicts",
-		explain = "Open the 3-way conflict resolver for files with merge conflicts.\n\nLayout:\n  Left pane  — Incoming changes (theirs)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Local changes (ours)\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept local (ours) for current conflict\n  h   — Accept incoming (theirs) for current conflict\n  a   — Accept all local (ours)\n  A   — Accept all incoming (theirs)\n  s   — Save the resolved file and stage it\n  q   — Quit without saving",
+		explain = "Open the 3-way conflict resolver for files with merge conflicts.\n\nLayout:\n  Left pane  — Incoming changes (theirs)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Local changes (ours)\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept local (ours) for current conflict\n  h   — Accept incoming (theirs) for current conflict\n  a   — Accept all local (ours)\n  A   — Accept all incoming (theirs)\n  f   — Select another conflicted file\n  s   — Save the resolved file and stage it\n  q   — Quit without saving",
 	},
 
 	-- Remotes
