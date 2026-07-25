@@ -1473,6 +1473,39 @@ local function delete_branch(force)
 	end)
 end
 
+local function rename_branch()
+	if not repo_required() then
+		return
+	end
+
+	local branches = git.branches()
+	if vim.tbl_isempty(branches) then
+		notify("No branches found", vim.log.levels.WARN)
+		return
+	end
+
+	vim.ui.select(branches, { prompt = "Rename local branch" }, function(choice)
+		if not choice then
+			return
+		end
+
+		helpers.centered_input({ prompt = "New branch name", title = "Rename Branch", default = choice }, function(name)
+			name = name and vim.trim(name) or nil
+			if not name or name == "" or name == choice then
+				return
+			end
+			if not git.has_local_branch(choice) then
+				notify(string.format("Branch %s no longer exists", choice), vim.log.levels.WARN)
+				return
+			end
+
+			run_and_refresh(function()
+				return select(1, git.rename_branch(choice, name))
+			end, string.format("Renamed branch %s to %s", choice, name))
+		end)
+	end)
+end
+
 local function delete_branch_safe()
 	delete_branch(false)
 end
@@ -1894,6 +1927,12 @@ keymap_mappings = {
 		rhs = switch_branch,
 		desc = "Switch branch",
 		explain = "Switch to an existing local branch (git switch <name>).\nOpens a picker with all local branches. Your working tree must be clean or the switch may fail.\nTip: stash uncommitted changes first with [gzz] if needed.",
+	},
+	{
+		lhs = "gbN",
+		rhs = rename_branch,
+		desc = "Rename branch",
+		explain = "Rename a local branch (git branch -m <old> <new>).\nOpens a picker with all local branches, then prompts for the new name.\nThe currently checked-out branch can also be renamed.",
 	},
 	{
 		lhs = "gbR",

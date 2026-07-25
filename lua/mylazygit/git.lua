@@ -630,6 +630,20 @@ function M.delete_branch(name, force)
 	return system({ "branch", flag, name })
 end
 
+function M.rename_branch(old_name, new_name)
+	old_name = trim(old_name or "")
+	new_name = trim(new_name or "")
+
+	if old_name == "" then
+		return false, { "Branch name required" }
+	end
+	if new_name == "" then
+		return false, { "New branch name required" }
+	end
+
+	return system({ "branch", "-m", old_name, new_name })
+end
+
 function M.delete_remote_branch(remote, branch)
 	remote = trim(remote or "")
 	branch = trim(branch or "")
