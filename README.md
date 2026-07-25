@@ -101,6 +101,7 @@ Key | Action
 `U` | Update remote URL (`git remote set-url`)
 `gbn` | Create and switch to a new branch (`git switch -c`)
 `gbs` | Switch to an existing local branch
+`gbN` | Rename a local branch (`git branch -m`)
 `gbR` | Fetch and switch to a remote branch (create tracking branch)
 `gbd` | Delete local branch safely (`git branch -d`)
 `gbD` | Force delete local branch (`git branch -D`)
