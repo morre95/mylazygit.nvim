@@ -212,7 +212,7 @@ function M.pull_rebase(remote, branch)
 end
 
 function M.push(remote, branch)
-	return system({ "push", remote, branch })
+	return system({ "push", "--set-upstream", remote, branch })
 end
 
 function M.push_force(remote, branch)
@@ -234,7 +234,7 @@ function M.pull_rebase_async(remote, branch, callback)
 end
 
 function M.push_async(remote, branch, callback)
-	system_async({ "push", remote, branch }, {
+	system_async({ "push", "--set-upstream", remote, branch }, {
 		loading_msg = string.format("Pushing to %s/%s...", remote or "origin", branch or ""),
 	}, callback)
 end
