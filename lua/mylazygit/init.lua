@@ -1860,7 +1860,7 @@ keymap_mappings = {
 		lhs = "P",
 		rhs = git_push,
 		desc = "Push",
-		explain = "Push your local commits to the remote branch (git push <remote> <branch>).\nThis is an async operation — a loading message is shown while the push completes.\nIf the remote has new commits you haven't pulled, the push will be rejected. Pull first with [p].",
+		explain = "Push your local commits to the same-named remote branch and set it as upstream (git push --set-upstream <remote> <branch>).\nThis is an async operation — a loading message is shown while the push completes.\nIf the remote has new commits you haven't pulled, the push will be rejected. Pull first with [p].",
 	},
 	{
 		lhs = "gPF",

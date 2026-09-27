@@ -90,7 +90,7 @@ Key | Action
 `gct` | Temporarily detach and checkout selected commit
 `gcr` | Return to branch/commit from temporary checkout
 `p` | Pull with rebase from configured remote/branch (`git pull --rebase`)
-`P` | Push current branch (`git push`)
+`P` | Push current branch and set its same-named remote branch as upstream (`git push --set-upstream`)
 `gPF` | Force push current branch (`git push --force`)
 `f` | Fetch configured remote
 `gpr` | Create GitHub pull request via `gh pr create`
