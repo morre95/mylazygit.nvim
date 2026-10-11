@@ -75,6 +75,7 @@ local keymap_mappings
 local function define_highlights()
 	vim.api.nvim_set_hl(0, "MyLazyGitPushed", { fg = "#98C379", default = true })
 	vim.api.nvim_set_hl(0, "MyLazyGitUnpushed", { fg = "#CD5C5C", default = true })
+	vim.api.nvim_set_hl(0, "MyLazyGitUnknown", { fg = "#ABB2BF", default = true })
 	vim.api.nvim_set_hl(0, "MyLazyGitStagedIndicator", { fg = "#98C379", default = true })
 	vim.api.nvim_set_hl(0, "MyLazyGitUnstagedIndicator", { fg = "#E5C07B", default = true })
 	vim.api.nvim_set_hl(0, "MyLazyGitUntrackedIndicator", { fg = "#9E9E9E", default = true })
@@ -432,6 +433,13 @@ function M.refresh()
 	local push_target, push_error = git.resolve_push_target()
 	table.insert(layout.info.details, "Pull: " .. (pull_target and (pull_target.remote .. " " .. pull_target.ref) or pull_error))
 	table.insert(layout.info.details, "Push: " .. (push_target and (push_target.remote .. " " .. push_target.ref) or push_error))
+	local publication = git.publication_snapshot(nil, config.max_commit_lines)
+	local freshness = publication.freshness
+	local fetch_description = "unobserved"
+	if freshness.fetched_at then fetch_description = "cached " .. os.date("%Y-%m-%d %H:%M:%S", freshness.fetched_at) end
+	if freshness.state == "failed" then fetch_description = "failed latest attempt; " .. fetch_description end
+	table.insert(layout.info.details, "Publication: " .. (publication.reason and ("unknown · " .. publication.reason) or publication.tracking_ref or "unknown")
+		.. " · Fetch: " .. fetch_description .. " · live remote unverified")
 
 	if detached_head then
 		table.insert(layout.info.details, "⚠ Detached HEAD: commits here are not on a branch unless you create one.")
@@ -474,21 +482,13 @@ function M.refresh()
 	layout.diff.views.remote_branches.title = string.format(" Remote Branches (%d) ", #remote_branches)
 	layout.diff.views.remote_branches.lines = remote_branch_lines
 
-	local branch_for_log = branch or config.branch_fallback
-	local log_lines = git.log(config.max_commit_lines)
-	local unpushed_set = {}
-
-	if branch_for_log then
-		for _, hash in ipairs(git.unpushed(config.remote, branch_for_log)) do
-			unpushed_set[hash] = true
-		end
-	end
+	local log_lines = publication.commits
 
 	local commit_lines, commit_highlights = {}, {}
 	for idx, entry in ipairs(log_lines) do
-		local line = string.format("%s %s", entry.hash, entry.message)
+		local line = string.format("%s [%s] %s", entry.hash, entry.publication, entry.message)
 		table.insert(commit_lines, line)
-		local group = unpushed_set[entry.hash] and "MyLazyGitUnpushed" or "MyLazyGitPushed"
+		local group = ({ published = "MyLazyGitPushed", ["local-only"] = "MyLazyGitUnpushed", unknown = "MyLazyGitUnknown" })[entry.publication]
 		table.insert(commit_highlights, {
 			line = idx - 1,
 			group = group,
