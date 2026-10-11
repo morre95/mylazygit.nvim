@@ -1,3 +1,4 @@
+local function create_session(cwd)
 local M = {}
 
 local function trim(s)
@@ -26,7 +27,7 @@ end
 
 local function system(args, opts)
 	opts = opts or {}
-	local cmd = { "git" }
+	local cmd = { "git", "-C", cwd }
 	vim.list_extend(cmd, normalize(args))
 
 	local output = vim.fn.systemlist(cmd)
@@ -43,8 +44,20 @@ local function system_external(bin, args, opts)
 	local cmd = { bin }
 	vim.list_extend(cmd, normalize_external(args or {}))
 
-	local output = vim.fn.systemlist(cmd)
-	local ok = vim.v.shell_error == 0
+	local output = {}
+	local job = vim.fn.jobstart(cmd, {
+		cwd = cwd,
+		stdout_buffered = true,
+		stderr_buffered = true,
+		on_stdout = function(_, lines)
+			vim.list_extend(output, lines)
+		end,
+		on_stderr = function(_, lines)
+			vim.list_extend(output, lines)
+		end,
+	})
+	local ok = job > 0 and vim.fn.jobwait({ job })[1] == 0
+	while output[#output] == "" do table.remove(output) end
 	if not ok and not opts.silent then
 		vim.notify(table.concat(output, "\n"), vim.log.levels.ERROR, { title = "MyLazyGit" })
 	end
@@ -67,14 +80,14 @@ local function system_async(args, opts, callback)
 		return
 	end
 
-	local cmd = { "git" }
+	local cmd = { "git", "-C", cwd }
 	vim.list_extend(cmd, normalize(args))
 
 	if opts.loading_msg then
 		vim.notify(opts.loading_msg, vim.log.levels.INFO, { title = "MyLazyGit" })
 	end
 
-	vim.system(cmd, { text = true }, function(result)
+	vim.system(cmd, { text = true, cwd = cwd }, function(result)
 		vim.schedule(function()
 			local ok = result.code == 0
 			local raw = ok and (result.stdout or "") or (result.stderr or result.stdout or "")
@@ -108,7 +121,7 @@ local function system_external_async(bin, args, opts, callback)
 		vim.notify(opts.loading_msg, vim.log.levels.INFO, { title = "MyLazyGit" })
 	end
 
-	vim.system(cmd, { text = true }, function(result)
+	vim.system(cmd, { text = true, cwd = cwd }, function(result)
 		vim.schedule(function()
 			local ok = result.code == 0
 			local raw = ok and (result.stdout or "") or (result.stderr or result.stdout or "")
@@ -215,8 +228,10 @@ function M.push(remote, branch)
 	return system({ "push", "--set-upstream", remote, branch })
 end
 
+local force_push_unavailable = "Raw force push is unavailable pending a reviewed lease-based replacement."
+
 function M.push_force(remote, branch)
-	return system({ "push", remote, branch, "--force" })
+	return false, { force_push_unavailable }
 end
 
 -- Async variants for network operations
@@ -246,9 +261,7 @@ function M.push_set_upstream_async(remote, branch, callback)
 end
 
 function M.push_force_async(remote, branch, callback)
-	system_async({ "push", remote, branch, "--force" }, {
-		loading_msg = string.format("Force pushing to %s/%s...", remote or "origin", branch or ""),
-	}, callback)
+	callback(false, { force_push_unavailable })
 end
 
 function M.fetch_async(remote, callback)
@@ -932,6 +945,34 @@ function M.create_pull_request(opts)
 	end
 
 	return system_external("gh", args)
+end
+
+function M.worktree()
+	return cwd
+end
+
+return M
+end
+
+local M = {}
+
+--- Capture a worktree once. Legacy functions below capture cwd on each call.
+--- A directory outside a repository remains usable for the init action.
+function M.session(path)
+	path = vim.fn.fnamemodify(path or vim.fn.getcwd(), ":p")
+	if path ~= "/" then path = path:gsub("/$", "") end
+	local output = vim.fn.systemlist({ "git", "-C", path, "rev-parse", "--show-toplevel" })
+	if vim.v.shell_error == 0 and output[1] then
+		path = output[1]
+	end
+	return create_session(path)
+end
+
+for name in pairs(create_session(".")) do
+	M[name] = function(...)
+		-- Legacy relative arguments are interpreted from the invocation directory.
+		return create_session(vim.fn.getcwd())[name](...)
+	end
 end
 
 return M

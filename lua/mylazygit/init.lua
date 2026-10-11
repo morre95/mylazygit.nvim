@@ -1,10 +1,12 @@
-local git = require("mylazygit.git")
+local git_module = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
 local conflict = require("mylazygit.conflict")
 local ai = require("mylazygit.ai")
 
-local M = {}
+local plugin = {}
+local active_controller
+local controllers = {}
 
 local config = {
 	remote = "origin",
@@ -21,6 +23,8 @@ local config = {
 	ai = {},
 }
 
+local function create_controller(git)
+local M = {}
 local state = {
 	status = {},
 	commits = {},
@@ -174,12 +178,6 @@ local function show_branch_log(branch)
 	})
 end
 
-ui.set_handlers({
-	on_worktree_select = show_preview_for_file,
-	on_commit_select = show_preview_for_commit,
-	on_local_branch_select = show_branch_log,
-})
-
 local function collect_files(predicate)
 	local files = {}
 	for _, item in ipairs(state.status) do
@@ -248,7 +246,7 @@ local function select_multiple(files, prompt, on_done)
 end
 
 function M.refresh()
-	if not ui.is_open() then
+	if active_controller ~= M or not ui.is_open() then
 		return
 	end
 
@@ -334,6 +332,8 @@ function M.refresh()
 			config.branch_fallback
 		)
 	end
+
+	layout.info.branch = layout.info.branch .. " · " .. git.worktree()
 
 	local staged, unstaged, untracked = 0, 0, 0
 	local worktree_lines, worktree_items, worktree_highlights = {}, {}, {}
@@ -811,13 +811,12 @@ local function git_push()
 end
 
 local function git_push_force()
-	if not repo_required() then
-		return
+	local ok, output = git.push_force(config.remote, git.current_branch() or config.branch_fallback)
+	if ok then
+		M.refresh()
+	else
+		notify(table.concat(output, "\n"), vim.log.levels.WARN)
 	end
-	local branch = git.current_branch() or config.branch_fallback
-	run_async_and_refresh(function(cb)
-		git.push_force_async(config.remote, branch, cb)
-	end, string.format("Force pushed to %s/%s", config.remote, branch))
 end
 
 local function git_fetch()
@@ -1013,7 +1012,7 @@ local function resolve_conflicts()
 		return
 	end
 
-	local conflicted_files = conflict.get_conflicted_files()
+	local conflicted_files = conflict.get_conflicted_files(git)
 
 	if vim.tbl_isempty(conflicted_files) then
 		notify("No files with conflicts found", vim.log.levels.INFO)
@@ -1022,14 +1021,14 @@ local function resolve_conflicts()
 
 	if #conflicted_files == 1 then
 		-- Only one file, open it directly
-		conflict.open(conflicted_files[1])
+		conflict.open(conflicted_files[1], git)
 	else
 		-- Multiple files, let user choose
 		vim.ui.select(conflicted_files, {
 			prompt = string.format("Select file to resolve (%d conflicts)", #conflicted_files),
 		}, function(choice)
 			if choice then
-				conflict.open(choice)
+				conflict.open(choice, git)
 			end
 		end)
 	end
@@ -1820,7 +1819,7 @@ keymap_mappings = {
 	},
 	{
 		lhs = "aic",
-		rhs = ai.generate_commit_message,
+		rhs = function() ai.generate_commit_message(git) end,
 		desc = "AI commit message",
 		explain = "Generate a commit message from the staged diff using OpenRouter, then let you edit it before committing.\nIf nothing is staged and there are working-tree changes, you'll be prompted to stage all changes first.",
 	},
@@ -1865,8 +1864,8 @@ keymap_mappings = {
 	{
 		lhs = "gPF",
 		rhs = git_push_force,
-		desc = "Push force",
-		explain = "Force push your local branch to the remote (git push --force).\nThis overwrites the remote history with your local history.\n\nWarning: this is destructive. Commits on the remote that you don't have locally will be lost.\nOnly use this after an amend or rebase when you know the remote needs to be overwritten.",
+		desc = "Force push unavailable",
+		explain = "Raw force push is unavailable because it can overwrite teammates’ commits.\nA reviewed lease-based replacement will be added separately. Ordinary push remains available with [P].",
 	},
 	{
 		lhs = "f",
@@ -2031,6 +2030,12 @@ local function set_keymaps()
 end
 
 function M.open()
+	active_controller = M
+	ui.set_handlers({
+		on_worktree_select = show_preview_for_file,
+		on_commit_select = show_preview_for_commit,
+		on_local_branch_select = show_branch_log,
+	})
 	ui.open()
 	set_keymaps()
 	M.refresh()
@@ -2040,8 +2045,10 @@ function M.setup(opts)
 	config = vim.tbl_deep_extend("force", config, opts or {})
 	local user_ai_on_change = type(config.ai) == "table" and config.ai.on_change or nil
 	local ai_opts = vim.tbl_deep_extend("force", {}, config.ai or {}, {
-		on_change = function(event)
-			M.refresh()
+		on_change = function(event, session)
+			if active_controller and active_controller.worktree() == session.worktree() then
+				active_controller.refresh()
+			end
 			if type(user_ai_on_change) == "function" then
 				user_ai_on_change(event)
 			end
@@ -2061,8 +2068,35 @@ function M.setup(opts)
 	})
 
 	vim.api.nvim_create_user_command("MyLazyGit", function()
-		M.open()
+		plugin.open()
 	end, {})
 end
 
+function M.worktree()
+	return git.worktree()
+end
+
 return M
+end
+
+function plugin.open()
+	-- Repeated opens focus the existing session even if Neovim changed directory.
+	if ui.is_open() and active_controller then
+		active_controller.open()
+		return
+	end
+	local session = git_module.session()
+	local root = session.worktree()
+	controllers[root] = controllers[root] or create_controller(session)
+	controllers[root].open()
+end
+
+function plugin.refresh()
+	if active_controller then active_controller.refresh() end
+end
+
+function plugin.setup(opts)
+	create_controller(git_module.session()).setup(opts)
+end
+
+return plugin

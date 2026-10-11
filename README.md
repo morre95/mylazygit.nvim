@@ -91,7 +91,7 @@ Key | Action
 `gcr` | Return to branch/commit from temporary checkout
 `p` | Pull with rebase from configured remote/branch (`git pull --rebase`)
 `P` | Push current branch and set its same-named remote branch as upstream (`git push --set-upstream`)
-`gPF` | Force push current branch (`git push --force`)
+`gPF` | Explain why raw force push is unavailable pending a reviewed lease-based replacement
 `f` | Fetch configured remote
 `gpr` | Create GitHub pull request via `gh pr create`
 `ghr` | Create GitHub repo via `gh repo create --source . --push`
@@ -160,10 +160,32 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 
 ## Notes
 
-- All git operations happen in the current working directory of Neovim. Change directories (`:cd`, `:lcd`, or via your file tree) before launching if needed.
+- Opening MyLazyGit captures the current Git worktree. Status, previews, staging, commits, network operations, GitHub commands, AI prompts, and conflict resolution continue using that worktree after `:cd`, `:lcd`, or a file-tree directory change. Change directories before launching to choose a worktree. Calling `:MyLazyGit` while it is open focuses the existing session. Close it and reopen to choose another worktree.
+- Pending prompts and callbacks retain their original worktree even if another session opens; they cannot redraw the other session. Temporary checkout return points are remembered separately for each worktree until you return or exit Neovim.
+- Raw force push is disabled in both the UI and Git-module entry points because it can overwrite teammates' commits. A reviewed lease-based replacement is separate work; ordinary push remains available.
 - Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the UI now shows a clear detached warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
 - When you trigger `gpr` from a branch that has not been pushed/upstreamed yet, mylazygit.nvim asks whether it should push with upstream first and then continue PR creation.
 - Repository creation (`ghr`) also uses `gh` and runs `gh repo create --source . --push` with your chosen visibility (`private` or `public`).
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).
+
+## Repository sessions and verification
+
+Existing Git-module functions keep their invocation-time working-directory behavior. Callers needing a stable context can capture a session and use the same operations and return values:
+
+```lua
+local repo = require('mylazygit.git').session() -- optional directory argument
+local root = repo.worktree()
+local ok, output = repo.stage({ 'file.lua' })
+```
+
+Session paths resolve to the worktree root, including linked worktrees and sessions opened from subdirectories. Opening outside a repository captures that directory so `i` can initialize it.
+
+Run the isolated integration harness from the project root:
+
+```sh
+./tests/run.sh
+```
+
+The harness requires Git, Neovim 0.10+ and a POSIX shell. It creates a temporary local bare remote and two clones per scenario, isolates Git configuration, and removes fixtures afterward. It verifies actual Git outcomes through session operations and UI actions, including delayed prompts, session reopening, async fetch, checkout return, linked worktrees, disabled force push, and synchronous execution fallbacks. GitHub and AI transport are replaced with local test adapters; no account or network is required. The plugin retains its existing older-Neovim fallback; the harness exercises that path on the installed Neovim by disabling `vim.system` for those scenarios.

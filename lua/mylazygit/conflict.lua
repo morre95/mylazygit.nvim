@@ -1,4 +1,14 @@
+local git_module = require("mylazygit.git")
+local resolver = {}
+local active_resolver
+
+local function conflicted_files(git)
+  return git.diff({ "--name-only", "--diff-filter=U" })
+end
+
+local function create_resolver(git)
 local M = {}
+local cwd = git.worktree()
 
 -- State for the conflict resolver
 local state = {
@@ -358,21 +368,24 @@ end
 
 -- Check if we're in a rebase state
 local function is_in_rebase()
-  local ok, output = pcall(vim.fn.systemlist, { "git", "rev-parse", "--git-path", "rebase-merge" })
+  local ok, output = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--git-path", "rebase-merge" })
   if not ok or vim.v.shell_error ~= 0 then
     return false
   end
   local rebase_dir = output[1]
+  if rebase_dir and rebase_dir:sub(1, 1) ~= "/" then rebase_dir = cwd .. "/" .. rebase_dir end
   return vim.fn.isdirectory(rebase_dir) == 1
 end
 
 -- Check if we're in a merge state
 local function is_in_merge()
-  local ok, output = pcall(vim.fn.systemlist, { "git", "rev-parse", "--git-path", "MERGE_HEAD" })
+  local ok, output = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--git-path", "MERGE_HEAD" })
   if not ok or vim.v.shell_error ~= 0 then
     return false
   end
-  return vim.fn.filereadable(output[1]) == 1
+  local path = output[1]
+  if path and path:sub(1, 1) ~= "/" then path = cwd .. "/" .. path end
+  return path and vim.fn.filereadable(path) == 1
 end
 
 local function is_selected(choice, label)
@@ -391,7 +404,7 @@ local function run_git(args, opts, on_success, on_failure)
   opts = opts or {}
 
   if vim.system then
-    vim.system(vim.list_extend({ "git" }, args), { text = true, env = opts.env }, function(res)
+    vim.system(vim.list_extend({ "git", "-C", cwd }, args), { text = true, cwd = cwd, env = opts.env }, function(res)
       vim.schedule(function()
         if res.code == 0 then
           if on_success then
@@ -420,7 +433,7 @@ local function run_git(args, opts, on_success, on_failure)
     end
   end
 
-  local ok, output = pcall(vim.fn.systemlist, vim.list_extend({ "git" }, args))
+  local ok, output = pcall(vim.fn.systemlist, vim.list_extend({ "git", "-C", cwd }, args))
 
   if opts.env then
     for key, value in pairs(old_env) do
@@ -548,8 +561,8 @@ local function save_and_close()
   vim.notify(string.format("Saved %s", state.file_path), vim.log.levels.INFO)
 
   -- Stage the file
-  local stage_ok = pcall(vim.fn.system, { "git", "add", state.file_path })
-  if stage_ok and vim.v.shell_error == 0 then
+  local stage_ok = select(1, git.stage(state.file_path))
+  if stage_ok then
     vim.notify(string.format("Staged %s", state.file_path), vim.log.levels.INFO)
   else
     vim.notify("Failed to stage file", vim.log.levels.WARN)
@@ -614,6 +627,8 @@ function M.open(file_path)
     return
   end
 
+  if file_path:sub(1, 1) ~= "/" then file_path = cwd .. "/" .. file_path end
+
   -- Check if file exists
   local uv = vim.uv or vim.loop
   local stat = uv.fs_stat(file_path)
@@ -650,11 +665,24 @@ end
 
 -- Get all files with conflicts in the repository
 function M.get_conflicted_files()
-  local ok, output = pcall(vim.fn.systemlist, { "git", "diff", "--name-only", "--diff-filter=U" })
-  if not ok or vim.v.shell_error ~= 0 then
-    return {}
-  end
-  return output
+  return conflicted_files(git)
 end
 
 return M
+end
+
+function resolver.open(file_path, session)
+  if active_resolver then active_resolver.close() end
+  active_resolver = create_resolver(session or git_module.session())
+  active_resolver.open(file_path)
+end
+
+function resolver.close()
+  if active_resolver then active_resolver.close() end
+end
+
+function resolver.get_conflicted_files(session)
+  return conflicted_files(session or git_module.session())
+end
+
+return resolver
