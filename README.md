@@ -105,13 +105,17 @@ Key | Action
 `gbR` | Fetch and switch to a remote branch (create tracking branch)
 `gbd` | Delete local branch safely (`git branch -d`)
 `gbD` | Force delete local branch (`git branch -D`)
-`gbx` | Delete remote branch (`git push <remote> --delete <branch>`)
+`gbx` | Confirm the exact remote and full branch, then delete it (`git push <remote> --delete refs/heads/<branch>`)
 `gbm` | Merge selected local branch into current branch
 `gbw` | Run merge workflow helper (sync/rebase/merge flow)
 `gbr` | Rebase current branch onto selected branch
 `gzz` | Stash push
 `gzp` | Stash pop
 `gzd` | Stash drop
+
+Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves the remote `team` branch `task` untouched. Safe deletion refuses unmerged branches; force deletion has a separate confirmation. Both respect branches checked out in any worktree.
+
+Remote deletion requires `gbx`. Its picker and confirmation identify the configured remote and full branch name separately, including names containing slashes. Cancelling the picker or confirmation changes no refs. Local branches and same-named remote tags remain intact. Tracking refs matching more than one configured remote prefix are omitted, so overlapping remote names cannot select a guessed destination.
 
 ### Conflict resolver (`X`) key bindings
 
@@ -163,7 +167,7 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 - Opening MyLazyGit captures the current Git worktree. Status, previews, staging, commits, network operations, GitHub commands, AI prompts, and conflict resolution continue using that worktree after `:cd`, `:lcd`, or a file-tree directory change. Change directories before launching to choose a worktree. Calling `:MyLazyGit` while it is open focuses the existing session. Close it and reopen to choose another worktree.
 - Pending prompts and callbacks retain their original worktree even if another session opens; they cannot redraw the other session. Temporary checkout return points are remembered separately for each worktree until you return or exit Neovim.
 - Raw force push is disabled in both the UI and Git-module entry points because it can overwrite teammates' commits. A reviewed lease-based replacement is separate work; ordinary push remains available.
-- Branch detection relies on `git rev-parse --abbrev-ref HEAD`. When HEAD is detached, the UI now shows a clear detached warning (including the short HEAD hash) plus a reminder in the info area.
+- Branch detection reads the full local ref with `git symbolic-ref --quiet HEAD`, so a same-named remote-tracking ref cannot alter the local branch name. Detached HEAD shows a clear warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
 - When you trigger `gpr` from a branch that has not been pushed/upstreamed yet, mylazygit.nvim asks whether it should push with upstream first and then continue PR creation.
@@ -179,6 +183,8 @@ local repo = require('mylazygit.git').session() -- optional directory argument
 local root = repo.worktree()
 local ok, output = repo.stage({ 'file.lua' })
 ```
+
+Branch deletion uses separate inputs: `repo.delete_local_branch(name, force)` acts only on local branches (`delete_branch` remains a compatible alias), while `repo.delete_remote_branch(remote, branch)` takes the configured remote and full branch name separately. `repo.remote_branch_destinations()` returns unambiguous `{ remote = ..., branch = ... }` entries for deletion pickers; `repo.remote_branches()` keeps its existing string interface.
 
 Session paths resolve to the worktree root, including linked worktrees and sessions opened from subdirectories. Opening outside a repository captures that directory so `i` can initialize it.
 
