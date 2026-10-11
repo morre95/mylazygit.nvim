@@ -179,7 +179,7 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 - Branch detection reads the full local ref with `git symbolic-ref --quiet HEAD`, so a same-named remote-tracking ref cannot alter the local branch name. Detached HEAD shows a clear warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
-- `gpr` uses the resolved push destination as its PR head. It confirms first publication before pushing and continuing PR creation; an existing pull upstream is preserved.
+- `gpr` uses the resolved push destination as its PR head and the pull upstream remote as its base repository (falling back to the configured remote when no upstream exists). For known GitHub fork URLs, it passes `--head user:branch` and `--repo owner/repo`, deriving the head owner from the effective push URL. Unknown or ambiguous fork identities stop with guidance before publication. GitHub CLI supports user-owned fork heads; organization-owned fork heads are unsupported. It confirms first publication before pushing and continuing PR creation; an existing pull upstream is preserved.
 - Repository creation (`ghr`) also uses `gh` and runs `gh repo create --source . --push` with your chosen visibility (`private` or `public`).
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).
 
@@ -194,6 +194,8 @@ local ok, output = repo.stage({ 'file.lua' })
 ```
 
 Resolved synchronization uses `repo.resolve_pull_target()` and `repo.resolve_push_target(opts)` to obtain a target or `nil, reason`. A target carries `local_branch`, `remote`, the full remote-side `ref`, and its short `branch`; push targets also carry `requires_confirmation` and `set_upstream`. Pass `{ inspect_remote = true }` when preparing publication to check the effective push URL and detect first publication; `{ remote = ..., ref = "refs/heads/..." }` selects an explicit override. After reviewing a required confirmation, set `target.confirmed = true`.
+
+`repo.resolve_pr_target(push_target, base_remote)` returns an explicit GitHub `{ repo, head }` identity for PR creation, or `nil, reason` when a fork cannot be identified safely. Same-repository local transport adapters retain their unqualified head behavior.
 
 Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
 
