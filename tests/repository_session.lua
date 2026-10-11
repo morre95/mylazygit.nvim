@@ -198,6 +198,67 @@ test('repository scalar push configuration overrides global values using Git pre
   assert(alice.push_target(target))
   vim.env.GIT_CONFIG_GLOBAL = original_global
 end)
+test('simple policy allows confirmed triangular first publication while refusing unconfigured central upstream', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'push.default', 'simple' })
+  command(a, { 'config', 'remote.pushDefault', 'origin' })
+  equal(alice.resolve_push_target(), nil, 'Central simple push still requires upstream')
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', fork))
+  command(a, { 'config', 'remote.pushDefault', 'fork' })
+  local target, err = alice.resolve_push_target({ inspect_remote = true })
+  assert(target, err)
+  equal(target.ref, 'refs/heads/topic', 'Triangular simple publishes local branch name')
+  equal(target.requires_confirmation, true, 'Triangular first publication requires review')
+  equal(alice.push_target(target), false, 'Unconfirmed first publication changes no refs')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(git.session(fork).has_local_branch('topic'), true, 'Accepted first publication creates fork branch')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'Central remote remains unchanged')
+end)
+test('configured branch destination shorthand publishes its full branch and refuses tag collisions', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.push', 'topic:team-topic' })
+  local target, err = alice.resolve_push_target({ inspect_remote = true })
+  assert(target, err)
+  equal(target.ref, 'refs/heads/team-topic', 'Unqualified branch destination expands to heads')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(alice.remote_branch_exists('origin', 'team-topic'), true, 'Published intended branch shorthand')
+  command(a, { 'tag', 'team-topic' })
+  assert(alice.push('origin', 'refs/tags/team-topic:refs/tags/team-topic'))
+  target, err = alice.resolve_push_target()
+  equal(target, nil, 'Shorthand refuses remote branch/tag destination collision')
+  assert(err:find('ambiguous', 1, true), 'Collision explains ambiguous destination')
+  command(a, { 'config', 'remote.origin.push', 'refs/heads/topic:refs/heads/team-topic' })
+  target = assert(alice.resolve_push_target())
+  assert(alice.push_target(target))
+  command(a, { 'config', 'remote.origin.push', 'topic:tag-only' })
+  assert(alice.push('origin', 'refs/tags/team-topic:refs/tags/tag-only'))
+  target, err = alice.resolve_push_target()
+  equal(target, nil, 'Existing tag-only shorthand cannot be treated as a branch')
+  assert(err:find('branch', 1, true), 'Tag destination refusal explains branch scope')
+end)
+test('all ordinary push interfaces normalize mirror booleans consistently and refuse invalid policy', function()
+  local alice = git.session(a)
+  for _, value in ipairs({ 'FALSE', 'OFF', '0' }) do
+    command(a, { 'config', 'remote.origin.mirror', value })
+    local target, err = alice.resolve_push_target()
+    assert(target, err)
+    assert(alice.push_target(target))
+    assert(alice.push('origin', 'main'))
+  end
+  for _, value in ipairs({ 'TRUE', 'not-a-boolean' }) do
+    command(a, { 'config', 'remote.origin.mirror', value })
+    local target, reason = alice.resolve_push_target()
+    equal(target, nil, 'Unsafe mirror policy has no resolved target')
+    local ok, output = alice.push('origin', 'main')
+    equal(ok, false, 'Legacy ordinary push has the same mirror refusal')
+    equal(output[1], reason, 'Mirror policy reports the same actionable result at both interfaces')
+  end
+end)
 test('explicit local deletion of team/task leaves the team remote task untouched', function()
   local alice = git.session(a)
   assert(alice.remote_add('team', remote))
@@ -390,6 +451,34 @@ test('PR first publication uses its resolved differently named destination and c
     if map.lhs == '<Esc>' then map.callback(); break end
   end
   vim.fn.confirm = original_confirm; ui.close()
+end)
+test('revisiting explicit push help retains one explanation heading', function()
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local first
+  for visit = 1, 2 do
+    action('?')
+    local help_buf = vim.api.nvim_get_current_buf()
+    local selected
+    for index, line in ipairs(vim.api.nvim_buf_get_lines(help_buf, 0, -1, false)) do
+      if line:find('[gPp]', 1, true) then selected = index end
+    end
+    assert(selected, 'Explicit destination action appears in help')
+    vim.api.nvim_win_set_cursor(0, { selected, 0 })
+    vim.api.nvim_exec_autocmds('CursorMoved', { buffer = help_buf })
+    local explanation
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.bo[buf].filetype == 'mylazygit-explain' then explanation = vim.api.nvim_buf_get_lines(buf, 0, -1, false) end
+    end
+    assert(explanation, 'Help explanation is visible')
+    local headings = 0
+    for _, line in ipairs(explanation) do if line:match('^Explanation:') then headings = headings + 1 end end
+    equal(headings, 1, 'Help does not accumulate titles on visit ' .. visit)
+    if first then equal(explanation, first, 'Repeated help selection has stable content') else first = explanation end
+    action('q')
+  end
+  ui.close()
 end)
 test('dedicated remote deletion confirms the exact destination and cancellation changes no refs', function()
   local alice = git.session(a)
