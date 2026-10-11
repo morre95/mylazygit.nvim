@@ -1,4 +1,4 @@
-local git = require("mylazygit.git")
+local git_module = require("mylazygit.git")
 
 local M = {}
 
@@ -26,13 +26,13 @@ local function notify(msg, level)
 	vim.notify(msg, level or vim.log.levels.INFO, { title = "MyLazyGit AI" })
 end
 
-local function emit_change(event)
+local function emit_change(event, session)
 	local cb = config.on_change
 	if type(cb) ~= "function" then
 		return
 	end
 	vim.schedule(function()
-		cb(event)
+		cb(event, session)
 	end)
 end
 
@@ -56,7 +56,7 @@ local function limit_lines(lines, max_lines)
 	return trimmed
 end
 
-local function staged_diff()
+local function staged_diff(git)
 	local diff_lines = git.diff({ "--cached" })
 	if vim.tbl_isempty(diff_lines) then
 		return nil
@@ -235,23 +235,24 @@ local function split_subject_body(message)
 	end
 end
 
-local function unstage_all_after_cancel()
+local function unstage_all_after_cancel(git)
 	local ok = select(1, git.unstage({ "." }))
 	if ok then
 		notify("Commit cancelled. Staged changes were unstaged.", vim.log.levels.INFO)
-		emit_change("unstage")
+		emit_change("unstage", git)
 	else
 		notify("Commit cancelled, but failed to unstage staged changes.", vim.log.levels.WARN)
 	end
 end
 
-function M.generate_commit_message()
+function M.generate_commit_message(session)
+	local git = session or git_module.session()
 	if not git.is_repo() then
 		notify("MyLazyGit AI requires a git repository", vim.log.levels.WARN)
 		return
 	end
 
-	local diff_lines = staged_diff()
+	local diff_lines = staged_diff(git)
 	if not diff_lines then
 		local status_items = git.status() or {}
 		if not vim.tbl_isempty(status_items) then
@@ -273,10 +274,10 @@ function M.generate_commit_message()
 					return
 				end
 
-				emit_change("stage")
+				emit_change("stage", git)
 				notify("Changes staged. Retrying commit message generation …")
 				vim.schedule(function()
-					M.generate_commit_message()
+					M.generate_commit_message(git)
 				end)
 			end)
 		else
@@ -315,7 +316,7 @@ function M.generate_commit_message()
 	}, function(input)
 		local final_subject = input and vim.trim(input) or ""
 		if final_subject == "" then
-			unstage_all_after_cancel()
+			unstage_all_after_cancel(git)
 			return
 		end
 
@@ -327,7 +328,7 @@ function M.generate_commit_message()
 		local ok = select(1, git.commit(final_message))
 		if ok then
 			notify("Commit created with AI generated message")
-			emit_change("commit")
+			emit_change("commit", git)
 		end
 	end)
 end
