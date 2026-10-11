@@ -589,8 +589,20 @@ end
 -- Overlapping remote names (team and team/upstream) must not imply a destination.
 function M.remote_branch_destinations()
 	local remotes_ok, remotes = system({ "remote" }, { silent = true })
+	if not remotes_ok then
+		return {}
+	end
+	-- A custom mapping can populate any remote's namespace. Fail closed unless
+	-- every configured remote has exactly the standard branch-to-tracking map.
+	for _, remote in ipairs(remotes) do
+		local ok, specs = system({ "config", "--get-all", "remote." .. remote .. ".fetch" }, { silent = true })
+		local canonical = "refs/heads/*:refs/remotes/" .. remote .. "/*"
+		if not ok or #specs ~= 1 or (specs[1] ~= canonical and specs[1] ~= "+" .. canonical) then
+			return {}
+		end
+	end
 	local refs_ok, refs = system({ "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes/" }, { silent = true })
-	if not remotes_ok or not refs_ok then
+	if not refs_ok then
 		return {}
 	end
 

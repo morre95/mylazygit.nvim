@@ -117,6 +117,8 @@ Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves t
 
 Remote deletion requires `gbx`. Its picker and confirmation identify the configured remote and full branch name separately, including names containing slashes. Cancelling the picker or confirmation changes no refs. Local branches and same-named remote tags remain intact. Tracking refs matching more than one configured remote prefix are omitted, so overlapping remote names cannot select a guessed destination.
 
+The remote deletion picker supports exactly one standard fetch mapping per configured remote: `refs/heads/*:refs/remotes/<remote>/*` (with an optional leading `+`). If any remote has custom, additional or missing fetch mappings, the entire picker is empty. Such mappings can populate another remote's tracking namespace, so this action declines to guess the actual destination. Other remote operations remain available.
+
 ### Conflict resolver (`X`) key bindings
 
 Key | Action

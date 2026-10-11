@@ -1520,7 +1520,7 @@ local function delete_remote_branch()
 
 	local branches = git.remote_branch_destinations()
 	if vim.tbl_isempty(branches) then
-		notify("No remote branches found", vim.log.levels.WARN)
+		notify("No remote deletion destinations available. Only standard fetch mappings and unambiguous remote names are supported.", vim.log.levels.WARN)
 		return
 	end
 
@@ -1956,7 +1956,7 @@ keymap_mappings = {
 		lhs = "gbx",
 		rhs = delete_remote_branch,
 		desc = "Delete remote branch",
-		explain = "Delete a remote branch (git push <remote> --delete refs/heads/<branch>).\nThe dedicated picker and confirmation show the configured remote and full branch name separately.\nTracking refs matching overlapping remote names are omitted rather than guessed.\nCancellation changes no refs; local branches and same-named remote tags are unaffected.",
+		explain = "Delete a remote branch (git push <remote> --delete refs/heads/<branch>).\nThe dedicated picker and confirmation show the configured remote and full branch name separately.\nTracking refs matching overlapping remote names are omitted rather than guessed.\nEvery configured remote must have exactly one standard fetch mapping: refs/heads/* to refs/remotes/<remote>/*.\nCustom, additional or missing mappings leave the entire deletion picker empty because they may populate another remote's namespace.\nCancellation changes no refs; local branches and same-named remote tags are unaffected.",
 	},
 	{
 		lhs = "gbm",
