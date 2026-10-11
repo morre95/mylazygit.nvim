@@ -8,7 +8,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Always-on log/diff panel showing `git log --oneline` and a trimmed `git diff`, with color cues for pushed (green) vs local-only (red) commits
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
-- Run `git init`, `git pull --rebase`, `git push`, and `git fetch` against a configurable remote
+- Run `git init`, `git pull --rebase`, `git push`, and `git fetch`, with separate resolved pull and push targets
 - Create GitHub pull requests from inside Neovim via `gh pr create`
 - Create a GitHub repository from the current local repo via `gh repo create --source . --push` with private/public visibility
 - One-key merge workflow that rebases a feature branch on main before merging it back
@@ -27,7 +27,7 @@ return {
     local remote_name = vim.fn.systemlist({ "git", "remote" })[1] or "origin"
     require('mylazygit').setup({
       remote = remote_name,     -- change if you use something else
-      branch_fallback = branch, -- used when HEAD is detached
+      branch_fallback = branch, -- default for workflow/base branch selection; sync refuses detached HEAD
       merge_workflow = {
         main_branch = branch,   -- base branch for the workflow helper
         rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
@@ -89,8 +89,9 @@ Key | Action
 `gss` | Squash a range of recent commits into one
 `gct` | Temporarily detach and checkout selected commit
 `gcr` | Return to branch/commit from temporary checkout
-`p` | Pull with rebase from configured remote/branch (`git pull --rebase`)
-`P` | Push current branch and set its same-named remote branch as upstream (`git push --set-upstream`)
+`p` | Pull with rebase from the current branch upstream (full remote source ref)
+`P` | Publish to the resolved push target; review first publication before proceeding
+`gPp` | Choose an explicit push remote and destination branch, then confirm the full destination
 `gPF` | Explain why raw force push is unavailable pending a reviewed lease-based replacement
 `f` | Fetch configured remote
 `gpr` | Create GitHub pull request via `gh pr create`
@@ -112,6 +113,12 @@ Key | Action
 `gzz` | Stash push
 `gzp` | Stash pop
 `gzd` | Stash drop
+
+The header displays `Pull: <remote> refs/heads/<branch>` and `Push: <remote> refs/heads/<branch>` separately. Pull follows `branch.<local>.remote` and `branch.<local>.merge`, including different local/remote names and custom fetch mappings. Ordinary synchronization refuses detached HEAD.
+
+Push selects `branch.<local>.pushRemote`, then `remote.pushDefault`, then the branch upstream remote. A single configured `remote.<remote>.push` mapping takes precedence over `push.default`. Explicit `current`, `upstream`/`tracking`, and `simple` policies are respected; `nothing`, `matching`, forced or ambiguous mappings stop with an actionable explanation. Without explicit push policy, local `topic` tracking `origin/team-topic` publishes to `refs/heads/team-topic`; a distinct fork remote uses `refs/heads/topic`.
+
+First publication and `gPp` overrides show the full remote and destination ref and default to cancellation. With no push mapping, use `gPp` to deliberately choose a remote and branch. Publication sets a pull upstream only when one is absent; publishing to a fork preserves an existing upstream. Ordinary push publishes one branch without force or automatic follow-tags; multiple push endpoints and mirror configuration are refused. Divergent remote history is rejected by Git. The `gsC` chain stops after a failed pull.
 
 Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves the remote `team` branch `task` untouched. Safe deletion refuses unmerged branches; force deletion has a separate confirmation. Both respect branches checked out in any worktree.
 
@@ -172,7 +179,7 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 - Branch detection reads the full local ref with `git symbolic-ref --quiet HEAD`, so a same-named remote-tracking ref cannot alter the local branch name. Detached HEAD shows a clear warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
-- When you trigger `gpr` from a branch that has not been pushed/upstreamed yet, mylazygit.nvim asks whether it should push with upstream first and then continue PR creation.
+- `gpr` uses the resolved push destination as its PR head. It confirms first publication before pushing and continuing PR creation; an existing pull upstream is preserved.
 - Repository creation (`ghr`) also uses `gh` and runs `gh repo create --source . --push` with your chosen visibility (`private` or `public`).
 - This is intentionally tiny and focused; for the full TUI experience, use the original [lazygit](https://github.com/jesseduffield/lazygit).
 
@@ -185,6 +192,10 @@ local repo = require('mylazygit.git').session() -- optional directory argument
 local root = repo.worktree()
 local ok, output = repo.stage({ 'file.lua' })
 ```
+
+Resolved synchronization uses `repo.resolve_pull_target()` and `repo.resolve_push_target(opts)` to obtain a target or `nil, reason`. A target carries `local_branch`, `remote`, the full remote-side `ref`, and its short `branch`; push targets also carry `requires_confirmation` and `set_upstream`. Pass `{ inspect_remote = true }` when preparing publication to check the effective push URL and detect first publication; `{ remote = ..., ref = "refs/heads/..." }` selects an explicit override. After reviewing a required confirmation, set `target.confirmed = true`.
+
+Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
 
 Branch deletion uses separate inputs: `repo.delete_local_branch(name, force)` acts only on local branches (`delete_branch` remains a compatible alias), while `repo.delete_remote_branch(remote, branch)` takes the configured remote and full branch name separately. `repo.remote_branch_destinations()` returns unambiguous `{ remote = ..., branch = ... }` entries for deletion pickers; `repo.remote_branches()` keeps its existing string interface.
 
