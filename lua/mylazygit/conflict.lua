@@ -368,24 +368,10 @@ end
 
 -- Check if we're in a rebase state
 local function is_in_rebase()
-  local ok, output = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--git-path", "rebase-merge" })
-  if not ok or vim.v.shell_error ~= 0 then
-    return false
-  end
-  local rebase_dir = output[1]
-  if rebase_dir and rebase_dir:sub(1, 1) ~= "/" then rebase_dir = cwd .. "/" .. rebase_dir end
-  return vim.fn.isdirectory(rebase_dir) == 1
+  return git.repository_state().operation == "rebase"
 end
-
--- Check if we're in a merge state
 local function is_in_merge()
-  local ok, output = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--git-path", "MERGE_HEAD" })
-  if not ok or vim.v.shell_error ~= 0 then
-    return false
-  end
-  local path = output[1]
-  if path and path:sub(1, 1) ~= "/" then path = cwd .. "/" .. path end
-  return path and vim.fn.filereadable(path) == 1
+  return git.repository_state().operation == "merge"
 end
 
 local function is_selected(choice, label)
@@ -403,51 +389,11 @@ end
 local function run_git(args, opts, on_success, on_failure)
   opts = opts or {}
 
-  if vim.system then
-    vim.system(vim.list_extend({ "git", "-C", cwd }, args), { text = true, cwd = cwd, env = opts.env }, function(res)
-      vim.schedule(function()
-        if res.code == 0 then
-          if on_success then
-            on_success()
-          end
-        elseif on_failure then
-          local output = {}
-          if res.stdout and res.stdout ~= "" then
-            vim.list_extend(output, vim.split(res.stdout, "\n", { trimempty = true }))
-          end
-          if res.stderr and res.stderr ~= "" then
-            vim.list_extend(output, vim.split(res.stderr, "\n", { trimempty = true }))
-          end
-          on_failure(output)
-        end
-      end)
-    end)
-    return
-  end
-
-  local old_env = {}
-  if opts.env then
-    for key, value in pairs(opts.env) do
-      old_env[key] = vim.env[key]
-      vim.env[key] = value
-    end
-  end
-
-  local ok, output = pcall(vim.fn.systemlist, vim.list_extend({ "git", "-C", cwd }, args))
-
-  if opts.env then
-    for key, value in pairs(old_env) do
-      vim.env[key] = value
-    end
-  end
-
-  if ok and vim.v.shell_error == 0 then
-    if on_success then
-      on_success()
-    end
-  elseif on_failure then
-    on_failure(output or {})
-  end
+  local operation = args[1] == "commit" and "merge" or args[1]
+  git.recover(operation, "continue", function(ok, output)
+    if ok then if on_success then on_success() end
+    elseif on_failure then on_failure(output) end
+  end)
 end
 
 local function prompt_post_resolve(in_rebase, in_merge)
@@ -548,25 +494,12 @@ local function save_and_close()
   -- Build final content
   local final_lines = build_result()
 
-  -- Write to file
-  local uv = vim.uv or vim.loop
-  local fd = uv.fs_open(state.file_path, "w", 438)
-  if not fd then
-    vim.notify("Failed to write to file: " .. state.file_path, vim.log.levels.ERROR)
+  local stage_ok, output = git.resolve_conflict(state.file_path, final_lines, { contents = state.original_contents, expected = state.expected })
+  if not stage_ok then
+    vim.notify(table.concat(output, "\n"), vim.log.levels.WARN)
     return
   end
-  uv.fs_write(fd, table.concat(final_lines, "\n") .. "\n")
-  uv.fs_close(fd)
-
-  vim.notify(string.format("Saved %s", state.file_path), vim.log.levels.INFO)
-
-  -- Stage the file
-  local stage_ok = select(1, git.stage(state.file_path))
-  if stage_ok then
-    vim.notify(string.format("Staged %s", state.file_path), vim.log.levels.INFO)
-  else
-    vim.notify("Failed to stage file", vim.log.levels.WARN)
-  end
+  vim.notify(string.format("Saved and staged %s", state.file_path), vim.log.levels.INFO)
 
   -- Check if in rebase or merge and offer to continue
   local in_rebase = is_in_rebase()
@@ -651,6 +584,8 @@ function M.open(file_path)
 
   -- Set up state
   state.file_path = file_path
+  state.original_contents = vim.fn.readfile(file_path)
+  state.expected = git.repository_state()
   state.conflicts = conflicts
   state.file_chunks = file_chunks
   state.current_conflict_idx = 1
