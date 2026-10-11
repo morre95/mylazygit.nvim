@@ -327,9 +327,8 @@ function M.refresh()
 		layout.info.branch = string.format("Branch: %s", branch)
 	else
 		layout.info.branch = string.format(
-			"Branch: DETACHED HEAD at %s (fallback: %s)",
-			head_short or "unknown",
-			config.branch_fallback
+			"Branch: DETACHED HEAD at %s",
+			head_short or "unknown"
 		)
 	end
 
@@ -401,6 +400,11 @@ function M.refresh()
 			untracked
 		),
 	}
+
+	local pull_target, pull_error = git.resolve_pull_target()
+	local push_target, push_error = git.resolve_push_target()
+	table.insert(layout.info.details, "Pull: " .. (pull_target and (pull_target.remote .. " " .. pull_target.ref) or pull_error))
+	table.insert(layout.info.details, "Push: " .. (push_target and (push_target.remote .. " " .. push_target.ref) or push_error))
 
 	if detached_head then
 		table.insert(layout.info.details, "⚠ Detached HEAD: commits here are not on a branch unless you create one.")
@@ -692,6 +696,31 @@ local function squash_commits()
 	end)
 end
 
+local function target_label(target)
+	return target.remote .. " " .. target.ref
+end
+
+local function choose_push_target(opts, callback, always_confirm)
+	local target, err = git.resolve_push_target(vim.tbl_extend("force", opts or {}, { inspect_remote = true }))
+	if not target then notify(err, vim.log.levels.WARN); return end
+	if target.requires_confirmation or always_confirm then
+		local answer = vim.fn.confirm(string.format("Publish %s to remote %s, branch %s?",
+			target.local_branch, target.remote, target.ref), "&Publish\n&Cancel", 2)
+		if answer ~= 1 then notify("Push cancelled"); return end
+		target.confirmed = true
+	end
+	callback(target)
+end
+
+local function push_to_target(target, callback)
+	git.push_target_async(target, function(ok, output)
+		if ok then notify("Pushed to " .. target_label(target))
+		else notify(table.concat(output, "\n"), vim.log.levels.WARN) end
+		M.refresh()
+		if callback then callback(ok, target) end
+	end)
+end
+
 local function stage_all_and_commit()
 	if not repo_required() then
 		return
@@ -750,24 +779,12 @@ local function stage_all_and_commit_and_pull()
 		notify("Commit created")
 		M.refresh()
 
-		-- Only after successful commit, run pull rebase
-		local branch = git.current_branch() or config.branch_fallback
-		local pull_ok = select(1, git.pull_rebase(config.remote, branch))
-		if pull_ok then
-			notify(string.format("Pulled and rebase %s/%s", config.remote, branch))
-		end
-
-		local confirmation = vim.fn.confirm(string.format("Do you want to push to %s?", branch), "&Yes\n&No", 2)
-		if confirmation ~= 1 then
-			notify("Push cancelled", vim.log.levels.INFO)
-			M.refresh()
-			return
-		end
-
-		local pushed_ok = select(1, git.push(config.remote, branch))
-		if pushed_ok then
-			notify(string.format("Pushed to %s/%s", config.remote, branch))
-		end
+		-- A failed pull ends the chain before offering publication.
+		local target, err = git.resolve_pull_target()
+		if not target then notify(err, vim.log.levels.WARN); return end
+		if not select(1, git.pull_target(target, true)) then M.refresh(); return end
+		notify("Pulled and rebased " .. target_label(target))
+		choose_push_target({}, function(push_target) push_to_target(push_target) end, true)
 
 		M.refresh()
 	end)
@@ -780,34 +797,34 @@ local function git_init()
 end
 
 local function git_pull()
-	if not repo_required() then
-		return
-	end
-	local branch = git.current_branch() or config.branch_fallback
-	run_async_and_refresh(function(cb)
-		git.pull_rebase_async(config.remote, branch, cb)
-	end, string.format("Pulled (rebase) %s/%s", config.remote, branch))
+	if not repo_required() then return end
+	local target, err = git.resolve_pull_target()
+	if not target then notify(err, vim.log.levels.WARN); return end
+	run_async_and_refresh(function(cb) git.pull_target_async(target, true, cb) end,
+		"Pulled (rebase) " .. target_label(target))
 end
 
-local function git_pull_rebase()
-	if not repo_required() then
-		return
-	end
-
-	local branch = git.current_branch() or config.branch_fallback
-	run_async_and_refresh(function(cb)
-		git.pull_rebase_async(config.remote, branch, cb)
-	end, string.format("Pull and rebase from %s/%s", config.remote, branch))
-end
+local git_pull_rebase = git_pull
 
 local function git_push()
-	if not repo_required() then
-		return
-	end
-	local branch = git.current_branch() or config.branch_fallback
-	run_async_and_refresh(function(cb)
-		git.push_async(config.remote, branch, cb)
-	end, string.format("Pushed to %s/%s", config.remote, branch))
+	if not repo_required() then return end
+	choose_push_target({}, function(target) push_to_target(target) end)
+end
+
+local function git_push_override()
+	if not repo_required() then return end
+	local branch = git.current_branch()
+	if not branch then notify("Cannot push from detached HEAD; switch to a local branch.", vim.log.levels.WARN); return end
+	vim.ui.select(git.remotes(), { prompt = "Choose explicit push remote" }, function(remote)
+		if not remote then return end
+		vim.ui.input({ prompt = "Destination branch: ", default = branch }, function(destination)
+			if not destination or vim.trim(destination) == "" then return end
+			if git.current_branch() ~= branch then notify("Branch changed since target selection; retry.", vim.log.levels.WARN); return end
+			destination = vim.trim(destination)
+			local ref = destination:match("^refs/") and destination or ("refs/heads/" .. destination)
+			choose_push_target({ remote = remote, ref = ref }, function(target) push_to_target(target) end)
+		end)
+	end)
 end
 
 local function git_push_force()
@@ -881,7 +898,7 @@ local function create_pull_request()
 		return
 	end
 
-	local function prompt_pr_form(pr_head)
+	local function prompt_pr_form(pr_target, base_remote)
 		local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
 
 		helpers.centered_dual_input({
@@ -899,14 +916,14 @@ local function create_pull_request()
 				return
 			end
 
-			if base ~= "" and base == current_branch then
-				notify("Base branch cannot be the same as the current branch", vim.log.levels.WARN)
+			if base ~= "" and base == pr_target.head then
+				notify("Base branch cannot be the same as the PR head in the same repository", vim.log.levels.WARN)
 				return
 			end
 
-			if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(config.remote, base) then
+			if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(base_remote, base) then
 				notify(
-					string.format("Base branch '%s' was not found locally or on %s", base, config.remote),
+					string.format("Base branch '%s' was not found locally or on %s", base, base_remote),
 					vim.log.levels.WARN
 				)
 				return
@@ -919,59 +936,32 @@ local function create_pull_request()
 						title = title,
 						body = body,
 						base = base ~= "" and base or nil,
-						head = pr_head,
+						head = pr_target.head,
+						repo = pr_target.repo,
 					}, cb)
 				end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
 			end)
 		end)
 	end
 
-	local pr_head = git.pr_head_branch(current_branch, config.remote)
-	if pr_head then
-		prompt_pr_form(pr_head)
+	local target, err = git.resolve_push_target({ inspect_remote = true })
+	if not target then notify(err, vim.log.levels.WARN); return end
+	local upstream = git.branch_upstream(current_branch)
+	local base_remote = upstream and upstream.remote or config.remote
+	local pr_target; pr_target, err = git.resolve_pr_target(target, base_remote)
+	if not pr_target then notify(err, vim.log.levels.WARN); return end
+	if not target.requires_confirmation and target.remote_exists then
+		prompt_pr_form(pr_target, base_remote)
 		return
 	end
-
-	local push_confirm = vim.fn.confirm(
-		string.format(
-			"Current branch '%s' has no upstream / remote branch. Push it to '%s' now?",
-			current_branch,
-			config.remote
-		),
-		"&Push and continue\n&Cancel",
-		1
-	)
-
-	if push_confirm ~= 1 then
-		notify("PR creation cancelled", vim.log.levels.INFO)
-		return
-	end
-
-	git.push_set_upstream_async(config.remote, current_branch, function(ok)
-		if ok then
-			notify(string.format("Pushed %s to %s and set upstream", current_branch, config.remote))
-			M.refresh()
-		end
-
-		if not ok then
-			return
-		end
-
-		local refreshed_pr_head = git.pr_head_branch(current_branch, config.remote)
-		if not refreshed_pr_head then
-			notify(
-				string.format(
-					"Current branch '%s' is still not available on remote '%s'. Please verify push/auth and retry gpr.",
-					current_branch,
-					config.remote
-				),
-				vim.log.levels.WARN
-			)
-			return
-		end
-
-		prompt_pr_form(refreshed_pr_head)
+	choose_push_target({}, function(selected)
+		local selected_pr_target, reason = git.resolve_pr_target(selected, base_remote)
+		if not selected_pr_target then notify(reason, vim.log.levels.WARN); return end
+		push_to_target(selected, function(ok)
+			if ok then prompt_pr_form(selected_pr_target, base_remote) end
+		end)
 	end)
+
 end
 
 local function check_conflicts()
@@ -1790,7 +1780,7 @@ keymap_mappings = {
 		lhs = "gsC",
 		rhs = stage_all_and_commit_and_pull,
 		desc = "Stage, commit, pull and push",
-		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the remote (git pull --rebase)\n4. Ask for confirmation, then push to the remote\n\nIdeal for solo branches where you want to sync everything in one action.",
+		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the branch upstream; stop if pull fails\n4. Review the full resolved push destination, then optionally publish\n\nPull and push can use different remotes or branch names. Detached HEAD and missing or ambiguous mappings stop the workflow.",
 	},
 	{
 		lhs = "gsu",
@@ -1808,7 +1798,7 @@ keymap_mappings = {
 		lhs = "gsp",
 		rhs = git_pull_rebase,
 		desc = "Pull rebase",
-		explain = "Pull from the remote and rebase local commits on top (git pull --rebase).\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
+		explain = "Pull from the configured branch upstream, including differently named remote branches, and rebase local commits on top.\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
 	},
 
 	-- Commits
@@ -1854,13 +1844,17 @@ keymap_mappings = {
 		lhs = "p",
 		rhs = git_pull,
 		desc = "Pull",
-		explain = "Pull changes from the remote and rebase your local commits on top (git pull --rebase).\nRebasing avoids automatic merge commits like 'Merge branch main into ...', keeping a clean linear history.\nThis is an async operation — the UI stays responsive while waiting for the network.",
+		explain = "Pull the full source branch configured by branch.<name>.remote and branch.<name>.merge, shown as Pull in the header, and rebase your local commits on top.\nRebasing avoids automatic merge commits like 'Merge branch main into ...', keeping a clean linear history.\nThis is an async operation — the UI stays responsive while waiting for the network.",
 	},
 	{
 		lhs = "P",
 		rhs = git_push,
 		desc = "Push",
-		explain = "Push your local commits to the same-named remote branch and set it as upstream (git push --set-upstream <remote> <branch>).\nThis is an async operation — a loading message is shown while the push completes.\nIf the remote has new commits you haven't pulled, the push will be rejected. Pull first with [p].",
+		explain = "Push the separate destination shown in the header. Branch pushRemote overrides remote.pushDefault, then the pull remote.\nConfigured remote push refspecs and push.default are honored; without explicit policy, use the upstream branch (or the local name on a fork).\nFirst publication requires full-destination confirmation. Use [gPp] to choose an explicit remote and branch. Missing or ambiguous mappings stop with an explanation.\nExisting pull upstream is preserved. Divergent remote history is rejected without forcing.",
+	},
+	{
+		lhs = "gPp", rhs = git_push_override, desc = "Choose explicit push destination",
+		explain = "Choose a remote and full destination branch.\nReview and confirm the full destination before first publication or override.\nExisting pull upstream is preserved; ordinary push never forces.",
 	},
 	{
 		lhs = "gPF",
@@ -1878,7 +1872,7 @@ keymap_mappings = {
 		lhs = "gpr",
 		rhs = create_pull_request,
 		desc = "Create pull request",
-		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nIf the current branch is not pushed yet, you will be prompted to push it before creating the PR.",
+		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nUses the resolved push destination branch as PR head. Known GitHub forks use user:branch and an explicit base repository; unknown fork identities stop with guidance. Organization-owned fork heads are unsupported by gh. First publication reviews the full destination before publishing, preserving an existing pull upstream. Missing or ambiguous mappings stop; use [gPp] to choose a destination.",
 	},
 	{
 		lhs = "ghr",

@@ -36,6 +36,241 @@ end
 local tests = {}
 local function test(name, fn) tests[#tests + 1] = { name, fn } end
 local git = require('mylazygit.git')
+test('pull and ordinary push follow a differently named upstream without publishing the local name', function()
+  local alice, bob = git.session(a), git.session(b)
+  command(a, { 'push', 'origin', 'main:team-topic' })
+  command(a, { 'switch', '-c', 'topic', '--track', 'origin/team-topic' })
+  command(b, { 'fetch', 'origin' })
+  command(b, { 'switch', '-c', 'team-topic', '--track', 'origin/team-topic' })
+  vim.fn.writefile({ 'upstream change' }, b .. '/upstream.txt')
+  assert(bob.stage('upstream.txt')); assert(bob.commit('Upstream update'))
+  assert(bob.push('origin', 'team-topic'))
+  local target = assert(alice.resolve_pull_target())
+  equal(target.remote, 'origin', 'Pull remote follows upstream')
+  equal(target.ref, 'refs/heads/team-topic', 'Pull names the source remote ref')
+  assert(alice.pull_target(target, true))
+  equal(alice.log(1)[1].message, 'Upstream update', 'Pulled intended branch')
+  vim.fn.writefile({ 'local change' }, a .. '/local.txt')
+  assert(alice.stage('local.txt')); assert(alice.commit('Local update'))
+  target = assert(alice.resolve_push_target())
+  equal(target.ref, 'refs/heads/team-topic', 'Push follows selected tracking destination')
+  assert(alice.push_target(target))
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'No same-named remote topic created')
+  assert(bob.pull('origin', 'team-topic'))
+  equal(bob.log(1)[1].message, 'Local update', 'Published intended branch')
+end)
+test('implicit triangular push selects the local name and inspects the effective push URL', function()
+  local alice = git.session(a)
+  command(a, { 'push', 'origin', 'main:team-topic' })
+  command(a, { 'switch', '-c', 'topic', '--track', 'origin/team-topic' })
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', remote))
+  command(a, { 'config', 'remote.fork.pushurl', fork })
+  command(a, { 'config', 'remote.pushDefault', 'fork' })
+  local target = assert(alice.resolve_push_target({ inspect_remote = true }))
+  equal(target.ref, 'refs/heads/topic', 'Fork uses local name with implicit triangular policy')
+  equal(target.requires_confirmation, true, 'Empty push URL requires first publication review')
+  local ok = alice.push_target(target)
+  equal(ok, false, 'Unconfirmed first publication refused at session seam')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(git.session(fork).has_local_branch('topic'), true, 'Published at push URL')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'Fetch URL unchanged')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'team-topic' }, 'Pull target retains different name')
+end)
+test('explicit current-branch push refspecs honor shorthand and suppress automatic tag publication', function()
+  local alice = git.session(a)
+  command(a, { 'config', 'push.default', 'matching' })
+  command(a, { 'config', 'remote.origin.push', 'HEAD' })
+  command(a, { 'config', 'push.followTags', 'true' })
+  command(a, { 'tag', '-a', 'release', '-m', 'Release' })
+  local target, err = alice.resolve_push_target()
+  assert(target, err)
+  equal(target.ref, 'refs/heads/main', 'HEAD shorthand maps to current branch')
+  assert(alice.push_target(target))
+  equal(command(remote, { 'tag', '--list' }), '', 'Ordinary branch publication does not add configured follow tags')
+  command(a, { 'config', 'remote.origin.push', 'refs/heads/*:refs/heads/team-*' })
+  target = assert(alice.resolve_push_target({ inspect_remote = true }))
+  equal(target.ref, 'refs/heads/team-main', 'Single wildcard maps current source branch')
+  equal(target.requires_confirmation, true, 'New mapped destination requires review')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(alice.remote_branch_exists('origin', 'team-main'), true, 'Published explicit configured destination')
+end)
+test('ordinary push entrypoints refuse forced refspecs and leave divergent remote history intact', function()
+  local alice, bob = git.session(a), git.session(b)
+  vim.fn.writefile({ 'bob history' }, b .. '/bob.txt')
+  assert(bob.stage('bob.txt')); assert(bob.commit('Bob remote history')); assert(bob.push('origin', 'main'))
+  vim.fn.writefile({ 'alice history' }, a .. '/alice.txt')
+  assert(alice.stage('alice.txt')); assert(alice.commit('Alice divergent history'))
+  local target = assert(alice.resolve_push_target())
+  equal(alice.push_target(target), false, 'Resolved ordinary publication rejects remote divergence')
+  equal(alice.push('origin', '+refs/heads/main:refs/heads/main'), false, 'Explicit ordinary publication refuses forcing')
+  local callbacks = 0
+  for _, method in ipairs({ alice.push_async, alice.push_set_upstream_async }) do
+    method('origin', '+refs/heads/main:refs/heads/main', function(ok)
+      equal(ok, false, 'Async ordinary publication refuses forcing'); callbacks = callbacks + 1
+    end)
+  end
+  assert(vim.wait(5000, function() return callbacks == 2 end), 'Both async refusals complete')
+  equal(git.session(remote).log(1)[1].message, 'Bob remote history', 'Teammate remote commit retained')
+end)
+test('ambiguous push policies and detached HEAD refuse synchronization with actionable results', function()
+  local alice = git.session(a)
+  local cases = {
+    { 'push.default', { 'matching' } },
+    { 'push.default', { 'nothing' } },
+    { 'branch.main.merge', { 'refs/heads/main', 'refs/heads/other' } },
+    { 'remote.origin.push', { 'refs/heads/main:refs/heads/one', 'refs/heads/main:refs/heads/two' } },
+    { 'remote.origin.push', { '+refs/heads/main:refs/heads/main' } },
+    { 'remote.origin.mirror', { 'true' } },
+    { 'remote.origin.pushurl', { remote, root .. '/other.git' } },
+  }
+  for _, case in ipairs(cases) do
+    command(a, { 'config', '--replace-all', case[1], case[2][1] })
+    for index = 2, #case[2] do command(a, { 'config', '--add', case[1], case[2][index] }) end
+    local target, reason = alice.resolve_push_target()
+    equal(target, nil, 'Unsafe mapping has no destination: ' .. case[1])
+    assert(reason and #reason > 0, 'Refusal explains configuration to repair')
+    command(a, { 'config', '--unset-all', case[1] })
+    if case[1] == 'branch.main.merge' then command(a, { 'config', case[1], 'refs/heads/main' }) end
+  end
+  command(a, { 'config', 'push.default', 'simple' })
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'origin' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  local target, reason = alice.resolve_push_target()
+  equal(target, nil, 'Explicit simple policy refuses differently named upstream')
+  assert(reason:find('simple', 1, true), 'Policy refusal explains simple')
+  command(a, { 'config', '--unset', 'push.default' })
+  local selected = assert(alice.resolve_push_target())
+  assert(alice.checkout_detached('HEAD'))
+  for _, resolve in ipairs({ alice.resolve_pull_target, alice.resolve_push_target }) do
+    target, reason = resolve()
+    equal(target, nil, 'Detached HEAD has no sync destination')
+    assert(reason:find('detached HEAD', 1, true), 'Detached refusal is actionable')
+  end
+  equal(alice.push_target(selected), false, 'Delayed selection cannot publish after branch change')
+  equal(git.session(remote).log(1)[1].message, 'Initial', 'Refusals preserve remote history')
+end)
+test('pull uses full source refs for slash remote names and custom fetch mappings', function()
+  local alice, bob = git.session(a), git.session(b)
+  command(a, { 'push', 'origin', 'main:team-topic' })
+  assert(alice.remote_add('team/upstream', remote))
+  command(a, { 'config', 'remote.team/upstream.fetch', '+refs/heads/team-*:refs/remotes/custom/*' })
+  assert(alice.fetch('team/upstream'))
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'team/upstream' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/team-topic' })
+  command(b, { 'fetch', 'origin' })
+  command(b, { 'switch', '-c', 'team-topic', '--track', 'origin/team-topic' })
+  vim.fn.writefile({ 'mapped upstream change' }, b .. '/mapped.txt')
+  assert(bob.stage('mapped.txt')); assert(bob.commit('Mapped upstream update')); assert(bob.push('origin', 'team-topic'))
+  local target = assert(alice.resolve_pull_target())
+  equal(target.remote, 'team/upstream', 'Remote is never split at its slash')
+  equal(target.ref, 'refs/heads/team-topic', 'Source ref is independent of tracking namespace')
+  local done
+  alice.pull_target_async(target, true, function(ok, output)
+    assert(ok, table.concat(output, '\n')); done = true
+  end)
+  assert(vim.wait(5000, function() return done end), 'Async mapped pull completes')
+  equal(alice.log(1)[1].message, 'Mapped upstream update', 'Fetched and rebased actual source branch')
+  command(a, { 'config', 'remote.pushDefault', 'origin' })
+  command(a, { 'config', 'branch.topic.pushRemote', 'team/upstream' })
+  target = assert(alice.resolve_push_target())
+  equal(target.remote, 'team/upstream', 'Branch pushRemote takes priority over repository push default')
+  equal(target.ref, 'refs/heads/team-topic', 'Selected upstream destination remains full source branch')
+end)
+test('repository scalar push configuration overrides global values using Git precedence', function()
+  local alice = git.session(a)
+  local original_global = vim.env.GIT_CONFIG_GLOBAL
+  local global = root .. '/global.gitconfig'
+  vim.fn.writefile({ '[push]', ' default = matching', '[remote]', ' pushDefault = missing',
+    '[branch "main"]', ' pushRemote = missing', '[remote "origin"]', ' mirror = true' }, global)
+  vim.env.GIT_CONFIG_GLOBAL = global
+  command(a, { 'config', 'push.default', 'current' })
+  command(a, { 'config', 'remote.pushDefault', 'origin' })
+  command(a, { 'config', 'branch.main.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.mirror', 'false' })
+  local target, err = alice.resolve_push_target()
+  assert(target, err)
+  equal(target.remote, 'origin', 'Local scalar destination overrides global configuration')
+  equal(target.ref, 'refs/heads/main', 'Local push policy overrides global matching')
+  assert(alice.push_target(target))
+  vim.env.GIT_CONFIG_GLOBAL = original_global
+end)
+test('simple policy allows confirmed triangular first publication while refusing unconfigured central upstream', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'push.default', 'simple' })
+  command(a, { 'config', 'remote.pushDefault', 'origin' })
+  equal(alice.resolve_push_target(), nil, 'Central simple push still requires upstream')
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', fork))
+  command(a, { 'config', 'remote.pushDefault', 'fork' })
+  local target, err = alice.resolve_push_target({ inspect_remote = true })
+  assert(target, err)
+  equal(target.ref, 'refs/heads/topic', 'Triangular simple publishes local branch name')
+  equal(target.requires_confirmation, true, 'Triangular first publication requires review')
+  equal(alice.push_target(target), false, 'Unconfirmed first publication changes no refs')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(git.session(fork).has_local_branch('topic'), true, 'Accepted first publication creates fork branch')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'Central remote remains unchanged')
+end)
+test('configured branch destination shorthand publishes its full branch and refuses tag collisions', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.push', 'topic:team-topic' })
+  local target, err = alice.resolve_push_target({ inspect_remote = true })
+  assert(target, err)
+  equal(target.ref, 'refs/heads/team-topic', 'Unqualified branch destination expands to heads')
+  target.confirmed = true; assert(alice.push_target(target))
+  equal(alice.remote_branch_exists('origin', 'team-topic'), true, 'Published intended branch shorthand')
+  command(a, { 'tag', 'team-topic' })
+  assert(alice.push('origin', 'refs/tags/team-topic:refs/tags/team-topic'))
+  target, err = alice.resolve_push_target()
+  equal(target, nil, 'Shorthand refuses remote branch/tag destination collision')
+  assert(err:find('ambiguous', 1, true), 'Collision explains ambiguous destination')
+  command(a, { 'config', 'remote.origin.push', 'refs/heads/topic:refs/heads/team-topic' })
+  target = assert(alice.resolve_push_target())
+  assert(alice.push_target(target))
+  command(a, { 'config', 'remote.origin.push', 'topic:tag-only' })
+  assert(alice.push('origin', 'refs/tags/team-topic:refs/tags/tag-only'))
+  target, err = alice.resolve_push_target()
+  equal(target, nil, 'Existing tag-only shorthand cannot be treated as a branch')
+  assert(err:find('branch', 1, true), 'Tag destination refusal explains branch scope')
+end)
+test('all ordinary push interfaces normalize mirror booleans consistently and refuse invalid policy', function()
+  local alice = git.session(a)
+  for _, value in ipairs({ 'FALSE', 'OFF', '0' }) do
+    command(a, { 'config', 'remote.origin.mirror', value })
+    local target, err = alice.resolve_push_target()
+    assert(target, err)
+    assert(alice.push_target(target))
+    assert(alice.push('origin', 'main'))
+  end
+  for _, value in ipairs({ 'TRUE', 'not-a-boolean' }) do
+    command(a, { 'config', 'remote.origin.mirror', value })
+    local target, reason = alice.resolve_push_target()
+    equal(target, nil, 'Unsafe mirror policy has no resolved target')
+    local ok, output = alice.push('origin', 'main')
+    equal(ok, false, 'Legacy ordinary push has the same mirror refusal')
+    equal(output[1], reason, 'Mirror policy reports the same actionable result at both interfaces')
+  end
+end)
+test('single-token source shorthand refuses colliding local branch and tag without changing remote refs', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.push', 'topic' })
+  command(a, { 'tag', 'topic' })
+  local target, err = alice.resolve_push_target({ inspect_remote = true })
+  equal(target, nil, 'Single-token branch/tag source collision refuses publication')
+  assert(err:find('ambiguous', 1, true), 'Refusal explains source ambiguity')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'No remote topic created')
+  equal(git.session(remote).log(1)[1].message, 'Initial', 'Existing remote history remains')
+end)
 test('explicit local deletion of team/task leaves the team remote task untouched', function()
   local alice = git.session(a)
   assert(alice.remote_add('team', remote))
@@ -116,6 +351,262 @@ local function ui_text()
   end
   return table.concat(lines, '\n')
 end
+test('fork publication UI displays separate full targets and confirms the destination while preserving pull upstream', function()
+  local alice = git.session(a)
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('my/fork', fork))
+  command(a, { 'config', 'branch.main.pushRemote', 'my/fork' })
+  command(a, { 'config', 'push.default', 'current' })
+  vim.fn.writefile({ 'fork change' }, a .. '/fork.txt')
+  assert(alice.stage('fork.txt')); assert(alice.commit('Fork publication'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  plugin.setup(); vim.api.nvim_set_current_dir(a); plugin.open()
+  assert(ui_text():find('Pull: origin refs/heads/main', 1, true), 'Pull destination displayed separately')
+  assert(ui_text():find('Push: my/fork refs/heads/main', 1, true), 'Push destination displayed separately')
+  -- Header labels must be above every child pane, not obscured by their windows.
+  local child_top = math.huge
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local cfg = vim.api.nvim_win_get_config(win)
+    local ft = vim.bo[vim.api.nvim_win_get_buf(win)].filetype
+    if ft == 'mylazygit-worktree' then child_top = cfg.row end
+  end
+  assert(child_top >= 5, 'Target header has reserved visible rows')
+  local original_confirm, accepted, prompts = vim.fn.confirm, false, 0
+  vim.fn.confirm = function(message, _, default)
+    prompts = prompts + 1
+    equal(message, 'Publish main to remote my/fork, branch refs/heads/main?', 'Full first publication destination')
+    equal(default, 2, 'Publication defaults to cancellation')
+    return accepted and 1 or 2
+  end
+  action('P')
+  equal(alice.remote_branch_exists('my/fork', 'main'), false, 'Cancel leaves fork untouched')
+  accepted = true; action('P')
+  assert(vim.wait(5000, function() return alice.remote_branch_exists('my/fork', 'main') end), 'Confirmed fork publication completes')
+  equal(alice.branch_upstream('main'), { remote = 'origin', branch = 'main' }, 'Pull upstream preserved')
+  equal(prompts, 2, 'Both attempts reviewed full destination')
+  vim.fn.confirm = original_confirm; ui.close()
+end)
+test('explicit push selection supports first publication, cancellation and stale branch refusal', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_select, original_input, original_confirm = vim.ui.select, vim.ui.input, vim.fn.confirm
+  local stage, prompts, pending = 'picker', 0
+  vim.ui.select = function(items, opts, submit)
+    equal(opts.prompt, 'Choose explicit push remote', 'Override identifies selection')
+    assert(vim.tbl_contains(items, 'origin'), 'Configured remote offered')
+    if stage == 'picker' then submit(nil) else submit('origin') end
+  end
+  vim.ui.input = function(_, submit)
+    if stage == 'input' then submit(nil)
+    elseif stage == 'stale' then pending = submit
+    else submit('team/topic') end
+  end
+  vim.fn.confirm = function(message, _, default)
+    prompts = prompts + 1
+    equal(message, 'Publish topic to remote origin, branch refs/heads/team/topic?', 'Override reviews full destination')
+    equal(default, 2, 'Override defaults to cancellation')
+    return stage == 'confirmed' and 1 or 2
+  end
+  action('P')
+  assert(notifications[#notifications]:find('gPp', 1, true), 'Missing mapping gives actionable selection')
+  action('gPp'); stage = 'input'; action('gPp')
+  equal(prompts, 0, 'Cancelled selections have no publication confirmation')
+  stage = 'confirm'; action('gPp')
+  equal(alice.remote_branch_exists('origin', 'team/topic'), false, 'Confirmation cancellation changes no refs')
+  stage = 'stale'; action('gPp'); assert(pending); assert(alice.switch('main')); pending('team/topic')
+  equal(prompts, 1, 'Changed branch is refused before confirmation')
+  assert(alice.switch('topic')); stage = 'confirmed'; action('gPp')
+  assert(vim.wait(5000, function() return alice.remote_branch_exists('origin', 'team/topic') end), 'Accepted first publication completes')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'team/topic' }, 'First publication deliberately configures upstream')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'Override does not publish fallback name')
+  vim.ui.select, vim.ui.input, vim.fn.confirm = original_select, original_input, original_confirm; ui.close()
+end)
+test('stage commit pull workflow stops before publication when real upstream rebase conflicts', function()
+  local alice, bob = git.session(a), git.session(b)
+  vim.fn.writefile({ 'bob side' }, b .. '/file.txt')
+  assert(bob.stage('file.txt')); assert(bob.commit('Bob upstream change')); assert(bob.push('origin', 'main'))
+  vim.fn.writefile({ 'alice side' }, a .. '/file.txt')
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_callback, original_confirm, submit = vim.fn.prompt_setcallback, vim.fn.confirm
+  vim.fn.prompt_setcallback = function(_, callback) submit = callback end
+  vim.fn.confirm = function() error('Failed pull must stop before publication choice') end
+  action('gsC'); assert(submit, 'Commit prompt opened'); submit('Alice conflicting change')
+  assert(not vim.tbl_isempty(alice.diff({ '--name-only', '--diff-filter=U' })), 'Real upstream conflict remains for resolution')
+  equal(git.session(remote).log(1)[1].message, 'Bob upstream change', 'Failed workflow preserves remote history')
+  vim.fn.prompt_setcallback, vim.fn.confirm = original_callback, original_confirm; ui.close()
+end)
+
+test('PR first publication uses its resolved differently named destination and cancellation preserves refs', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.push', 'refs/heads/topic:refs/heads/review-topic' })
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_confirm, accepted = vim.fn.confirm, false
+  vim.fn.confirm = function(message, _, default)
+    equal(message, 'Publish topic to remote origin, branch refs/heads/review-topic?', 'PR pre-push reviews resolved destination')
+    equal(default, 2, 'PR first publication defaults to cancellation')
+    return accepted and 1 or 2
+  end
+  action('gpr')
+  equal(alice.remote_branch_exists('origin', 'review-topic'), false, 'Cancelled PR publication preserves remote')
+  accepted = true; action('gpr')
+  assert(vim.wait(5000, function() return ui_text():find('Title: topic', 1, true) end), 'PR form follows successful publication')
+  equal(alice.remote_branch_exists('origin', 'review-topic'), true, 'PR publication uses configured branch')
+  equal(alice.remote_branch_exists('origin', 'topic'), false, 'PR publication creates no fallback branch')
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do
+    if map.lhs == '<Esc>' then map.callback(); break end
+  end
+  vim.fn.confirm = original_confirm; ui.close()
+end)
+test('fork PR creation qualifies the actual published head owner and explicit base repository', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'origin' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  command(a, { 'push', 'origin', 'main:topic' })
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', 'git@github.com:fetch-owner/project.git'))
+  command(a, { 'config', 'remote.fork.pushurl', 'git@github.com:contributor/project.git' })
+  local ssh = root .. '/local-ssh'
+  vim.fn.writefile({ '#!/bin/sh', 'for arg do', ' case "$arg" in',
+    '  "git-upload-pack "*) exec git-upload-pack "' .. fork .. '" ;;',
+    '  "git-receive-pack "*) exec git-receive-pack "' .. fork .. '" ;;',
+    ' esac', 'done', 'exit 1' }, ssh)
+  vim.fn.setfperm(ssh, 'rwx------')
+  command(a, { 'config', 'core.sshCommand', ssh })
+  command(a, { 'config', 'branch.topic.pushRemote', 'fork' })
+  command(a, { 'push', 'fork', 'topic' })
+  command(a, { 'remote', 'set-url', 'origin', 'https://github.com/upstream/project.git' })
+  local bin, arguments = root .. '/bin', root .. '/gh-args'
+  vim.fn.mkdir(bin, 'p')
+  vim.fn.writefile({ '#!/bin/sh', 'printf "%s\\n" "$@" > "' .. arguments .. '"' }, bin .. '/gh')
+  vim.fn.setfperm(bin .. '/gh', 'rwx------')
+  local original_path, original_input = vim.env.PATH, vim.ui.input
+  vim.env.PATH = bin .. ':' .. original_path
+  local body_prompts = 0
+  vim.ui.input = function(_, submit) body_prompts = body_prompts + 1; submit('') end
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open(); action('gpr')
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do if map.lhs == '<CR>' then map.callback(); break end end
+  assert(vim.wait(5000, function() return vim.fn.filereadable(arguments) == 1 end), 'Local gh transport receives PR command')
+  local args = vim.fn.readfile(arguments)
+  local values = {}
+  for index, arg in ipairs(args) do if arg:match('^%-%-') then values[arg] = args[index + 1] end end
+  equal(values['--head'], 'contributor:topic', 'Fork PR head includes actual destination owner')
+  equal(values['--repo'], 'upstream/project', 'PR targets explicit base repository')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'main' }, 'PR creation preserves pull upstream')
+  vim.fn.delete(arguments)
+  action('gpr')
+  vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'Base: topic' })
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do if map.lhs == '<CR>' then map.callback(); break end end
+  equal(body_prompts, 2, 'Identical branch names across fork and base repositories are valid')
+  assert(vim.wait(5000, function() return vim.fn.filereadable(arguments) == 1 end), 'Same-name fork PR reaches local gh transport')
+  args = vim.fn.readfile(arguments)
+  values = {}
+  for index, arg in ipairs(args) do if arg:match('^%-%-') then values[arg] = args[index + 1] end end
+  equal(values['--base'], 'topic', 'Base branch may share its name with fork head')
+  equal(values['--head'], 'contributor:topic', 'Qualified fork identity remains intact')
+  vim.env.PATH, vim.ui.input = original_path, original_input; ui.close()
+end)
+test('fork PR validates its base on the selected upstream remote when configured remote is the fork', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'origin' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', 'git@github.com:fetch-owner/project.git'))
+  command(a, { 'config', 'remote.fork.pushurl', 'git@github.com:contributor/project.git' })
+  local ssh = root .. '/local-ssh'
+  vim.fn.writefile({ '#!/bin/sh', 'for arg do', ' case "$arg" in',
+    '  "git-upload-pack "*) exec git-upload-pack "' .. fork .. '" ;;',
+    '  "git-receive-pack "*) exec git-receive-pack "' .. fork .. '" ;;',
+    ' esac', 'done', 'exit 1' }, ssh)
+  vim.fn.setfperm(ssh, 'rwx------')
+  command(a, { 'config', 'core.sshCommand', ssh })
+  command(a, { 'config', 'branch.topic.pushRemote', 'fork' })
+  command(a, { 'push', 'fork', 'topic' })
+  command(a, { 'remote', 'set-url', 'origin', 'https://github.com/upstream/project.git' })
+  local bin, arguments = root .. '/bin', root .. '/gh-args'
+  vim.fn.mkdir(bin, 'p')
+  vim.fn.writefile({ '#!/bin/sh', 'printf "%s\\n" "$@" > "' .. arguments .. '"' }, bin .. '/gh')
+  vim.fn.setfperm(bin .. '/gh', 'rwx------')
+  local original_path, original_input = vim.env.PATH, vim.ui.input
+  vim.env.PATH = bin .. ':' .. original_path
+  local body_prompted = false
+  vim.ui.input = function(_, submit) body_prompted = true; submit('') end
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  command(a, { 'branch', '-d', 'main' })
+  plugin.setup({ remote = 'fork' })
+  vim.api.nvim_set_current_dir(a); plugin.open(); action('gpr')
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do if map.lhs == '<CR>' then map.callback(); break end end
+  assert(body_prompted, 'Valid upstream main proceeds despite missing local/fork main')
+  assert(vim.wait(5000, function() return vim.fn.filereadable(arguments) == 1 end), 'Local gh transport receives PR command')
+  local args = vim.fn.readfile(arguments)
+  local values = {}
+  for index, arg in ipairs(args) do if arg:match('^%-%-') then values[arg] = args[index + 1] end end
+  equal(values['--head'], 'contributor:topic', 'Fork PR head includes actual destination owner')
+  equal(values['--repo'], 'upstream/project', 'PR targets explicit base repository')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'main' }, 'PR creation preserves pull upstream')
+  vim.env.PATH, vim.ui.input = original_path, original_input; ui.close(); plugin.setup({ remote = 'origin' })
+end)
+test('fork PR creation refuses unknown repository identities before publication or form entry', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'origin' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', fork))
+  command(a, { 'config', 'branch.topic.pushRemote', 'fork' })
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  local original_confirm = vim.fn.confirm
+  vim.fn.confirm = function() error('Unknown fork identity stops before publication choice') end
+  vim.api.nvim_set_current_dir(a); plugin.open(); action('gpr')
+  assert(notifications[#notifications]:find('GitHub repository identities', 1, true), 'Unknown identity explains needed GitHub URLs or explicit CLI choice')
+  assert(not ui_text():find('Title: topic', 1, true), 'Unknown fork identity has no PR form')
+  equal(alice.remote_branch_exists('fork', 'topic'), false, 'Unknown fork identity leaves remote untouched')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'main' }, 'Unknown identity preserves existing upstream')
+  vim.fn.confirm = original_confirm; ui.close()
+end)
+test('revisiting explicit push help retains one explanation heading', function()
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local first
+  for visit = 1, 2 do
+    action('?')
+    local help_buf = vim.api.nvim_get_current_buf()
+    local selected
+    for index, line in ipairs(vim.api.nvim_buf_get_lines(help_buf, 0, -1, false)) do
+      if line:find('[gPp]', 1, true) then selected = index end
+    end
+    assert(selected, 'Explicit destination action appears in help')
+    vim.api.nvim_win_set_cursor(0, { selected, 0 })
+    vim.api.nvim_exec_autocmds('CursorMoved', { buffer = help_buf })
+    local explanation
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.bo[buf].filetype == 'mylazygit-explain' then explanation = vim.api.nvim_buf_get_lines(buf, 0, -1, false) end
+    end
+    assert(explanation, 'Help explanation is visible')
+    local headings = 0
+    for _, line in ipairs(explanation) do if line:match('^Explanation:') then headings = headings + 1 end end
+    equal(headings, 1, 'Help does not accumulate titles on visit ' .. visit)
+    if first then equal(explanation, first, 'Repeated help selection has stable content') else first = explanation end
+    action('q')
+  end
+  ui.close()
+end)
 test('dedicated remote deletion confirms the exact destination and cancellation changes no refs', function()
   local alice = git.session(a)
   assert(alice.remote_add('team/upstream', remote))

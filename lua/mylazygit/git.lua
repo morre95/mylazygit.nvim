@@ -216,6 +216,49 @@ function M.stash_list()
 	return output
 end
 
+-- Targets use remote-side full refs, independent of fetch/tracking namespaces.
+local function config_values(key)
+	local ok, values = system({ "config", "--get-all", key }, { silent = true })
+	return ok and values or {}
+end
+
+local function config_one(key, multiple)
+	if multiple then
+		local values = config_values(key)
+		if #values > 1 then return nil, "Ambiguous " .. key .. "; configure one value." end
+		return values[1]
+	end
+	-- Scalar configuration follows Git's scope/last-value precedence.
+	local ok, values = system({ "config", "--get", key }, { silent = true })
+	return ok and values[1] or nil
+end
+
+local function push_endpoint(remote)
+	local key = "remote." .. remote .. ".mirror"
+	local bool_ok, mirror = system({ "config", "--bool", "--get", key }, { silent = true })
+	if not bool_ok and vim.v.shell_error ~= 1 then
+		return nil, "Invalid " .. key .. "; configure a valid false boolean for ordinary push."
+	end
+	if mirror[1] == "true" then
+		return nil, "Ordinary push refuses remote mirror configuration; disable " .. key .. "."
+	end
+	local ok, urls = system({ "remote", "get-url", "--push", "--all", remote }, { silent = true })
+	if not ok or #urls ~= 1 then return nil, "Ordinary push requires one configured push endpoint." end
+	return urls[1]
+end
+
+local function legacy_push_args(remote, refspec)
+	if not remote or not refspec or refspec == "" then
+		return nil, "Explicit push remote and refspec required; resolve the current branch destination."
+	end
+	if refspec:sub(1, 1) == "+" or refspec:sub(1, 1) == "-" then
+		return nil, "Ordinary push refuses forced refspecs or options."
+	end
+	local endpoint, err = push_endpoint(remote)
+	if not endpoint then return nil, err end
+	return { "push", "--no-follow-tags", "--set-upstream", "--", remote, refspec }
+end
+
 function M.pull(remote, branch)
 	return system({ "pull", remote, branch })
 end
@@ -225,7 +268,197 @@ function M.pull_rebase(remote, branch)
 end
 
 function M.push(remote, branch)
-	return system({ "push", "--set-upstream", remote, branch })
+	local args, err = legacy_push_args(remote, branch)
+	if not args then return false, { err } end
+	return system(args)
+end
+
+local function upstream_target(branch)
+	local remote, err = config_one("branch." .. branch .. ".remote")
+	if err then return nil, err end
+	local ref; ref, err = config_one("branch." .. branch .. ".merge", true)
+	if err then return nil, err end
+	if not remote or not ref then return nil, "No complete upstream for " .. branch .. "; configure branch remote and merge." end
+	if not ref:match("^refs/heads/.+") then return nil, "Upstream must identify a full refs/heads/ branch." end
+	return { remote = remote, ref = ref, branch = ref:sub(12), local_branch = branch }
+end
+
+function M.resolve_pull_target()
+	local branch = M.current_branch()
+	if not branch then return nil, "Cannot pull from detached HEAD; switch to a local branch." end
+	local target, err = upstream_target(branch)
+	if not target then return nil, err end
+	if target.remote ~= "." and not M.remote_get_url(target.remote) then
+		return nil, "Upstream remote " .. target.remote .. " is missing; configure its URL."
+	end
+	return target
+end
+
+local function configured_branch_destination(destination, endpoint)
+	if destination:match("^refs/heads/") then return destination end
+	if destination:match("^refs/") then return nil, "Configured push destination must identify a branch." end
+	local full = "refs/heads/" .. destination
+	if not select(1, system({ "check-ref-format", full }, { silent = true })) then
+		return nil, "Configured push destination must be a valid branch."
+	end
+	-- Git's unqualified destination can name an existing tag or be ambiguous.
+	-- Inspect its DWIM candidates before selecting a branch namespace.
+	local ok, refs = system({ "ls-remote", "--", endpoint }, { silent = true })
+	if not ok then return nil, "Cannot inspect configured push destination; verify its URL/authentication." end
+	local candidates = { [destination] = true, ["refs/" .. destination] = true,
+		["refs/tags/" .. destination] = true, [full] = true,
+		["refs/remotes/" .. destination] = true, ["refs/remotes/" .. destination .. "/HEAD"] = true }
+	local matches = {}
+	for _, line in ipairs(refs) do
+		local ref = line:match("^%S+%s+(%S+)$")
+		if ref and candidates[ref] then matches[ref] = true end
+	end
+	local names = vim.tbl_keys(matches)
+	if #names > 1 then return nil, "Configured push destination is ambiguous; use a full refs/heads/ branch." end
+	if #names == 1 then
+		if not names[1]:match("^refs/heads/") then return nil, "Configured push destination identifies a non-branch ref; use refs/heads/." end
+		return names[1]
+	end
+	return full
+end
+
+function M.resolve_push_target(opts)
+	opts = opts or {}
+	local branch = M.current_branch()
+	if not branch then return nil, "Cannot push from detached HEAD; switch to a local branch." end
+	local upstream, upstream_error = upstream_target(branch)
+	-- Partial/multiple upstream configuration is not an invitation to guess.
+	local has_upstream_config = #config_values("branch." .. branch .. ".remote") > 0
+		or #config_values("branch." .. branch .. ".merge") > 0
+	if has_upstream_config and not upstream then return nil, upstream_error end
+	local remote, err = config_one("branch." .. branch .. ".pushRemote")
+	if err then return nil, err end
+	if not remote then remote, err = config_one("remote.pushDefault") end
+	if err then return nil, err end
+	remote = opts.remote or remote or (upstream and upstream.remote)
+	if not remote then return nil, "No push destination; use gPp to choose a remote and branch." end
+	if not M.remote_get_url(remote) then return nil, "Push remote " .. remote .. " is missing; configure its URL." end
+	local endpoint; endpoint, err = push_endpoint(remote)
+	if not endpoint then return nil, err end
+	local specs = config_values("remote." .. remote .. ".push")
+	local ref = opts.ref
+	if not ref and #specs > 0 then
+		if #specs ~= 1 then return nil, "Ambiguous remote push refspecs; configure one current-branch mapping." end
+		local source, destination = specs[1]:match("^([^:]+):([^:]+)$")
+		local source_shorthand = source or specs[1]
+		if source_shorthand == branch and select(1, system({ "show-ref", "--verify", "refs/tags/" .. branch }, { silent = true })) then
+			return nil, "Configured push source is ambiguous; use the full refs/heads/ source."
+		end
+		if not source and (specs[1] == "HEAD" or specs[1] == branch or specs[1] == "refs/heads/" .. branch) then
+			source, destination = "refs/heads/" .. branch, "refs/heads/" .. branch
+		end
+		if not source or source:sub(1, 1) == "+" or (destination:match("^refs/") and not destination:match("^refs/heads/")) then
+			return nil, "Unsupported or forced push refspec; configure one non-force refs/heads mapping."
+		end
+		local local_ref = "refs/heads/" .. branch
+		if source:find("*", 1, true) then
+			local prefix, suffix = source:match("^([^*]*)%*([^*]*)$")
+			local dp, ds = destination:match("^([^*]*)%*([^*]*)$")
+			if not prefix or not dp or local_ref:sub(1, #prefix) ~= prefix
+				or (#suffix > 0 and local_ref:sub(-#suffix) ~= suffix) or #local_ref < #prefix + #suffix then
+				return nil, "Push refspec does not map the current branch; configure its destination."
+			end
+			ref = dp .. local_ref:sub(#prefix + 1, #local_ref - #suffix) .. ds
+		elseif source == local_ref or source == branch or source == "HEAD" then ref = destination
+		else return nil, "Push refspec does not map the current branch; configure its destination." end
+
+		ref, err = configured_branch_destination(ref, endpoint)
+		if not ref then return nil, err end
+	end
+	if not ref then
+		local policy; policy, err = config_one("push.default")
+		if err then return nil, err end
+		if policy == "nothing" or policy == "matching" then
+			return nil, "push.default=" .. policy .. " has no single destination; use gPp for an explicit override."
+		elseif policy == "current" then ref = "refs/heads/" .. branch
+		elseif policy == "upstream" or policy == "tracking" then
+			if not upstream or upstream.remote ~= remote then return nil, "push.default=upstream requires the pull upstream remote; configure push policy." end
+			ref = upstream.ref
+		elseif policy == "simple" then
+			if upstream and upstream.remote == remote and upstream.branch ~= branch then
+				return nil, "push.default=simple refuses differently named upstream; choose a push mapping or gPp."
+			end
+			if not upstream then
+				local remotes = M.remotes()
+				local pull_remote = #remotes == 1 and remotes[1] or "origin"
+				if remote == pull_remote then
+					return nil, "push.default=simple requires a central upstream; use gPp for first publication."
+				end
+			end
+			ref = "refs/heads/" .. branch
+		elseif policy ~= nil then return nil, "Unsupported push.default=" .. policy .. "; configure a single branch destination."
+		else ref = upstream and upstream.remote == remote and upstream.ref or ("refs/heads/" .. branch) end
+	end
+	if not ref:match("^refs/heads/.+") or not select(1, system({ "check-ref-format", ref }, { silent = true })) then
+		return nil, "Push destination must be a valid full refs/heads/ branch."
+	end
+	local target = { remote = remote, ref = ref, branch = ref:sub(12), local_branch = branch,
+		set_upstream = not upstream, endpoint = endpoint, override = opts.remote ~= nil or opts.ref ~= nil }
+	target.requires_confirmation = target.override or not upstream
+	if opts.inspect_remote then
+		local exists, output = system({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
+		if not exists and vim.v.shell_error ~= 2 then
+			return nil, "Cannot inspect push destination; verify URL/authentication: " .. table.concat(output, "\n")
+		end
+		target.remote_exists = exists
+		if not exists then target.requires_confirmation = true end
+	end
+	return target
+end
+
+local function target_args(target, operation, rebase)
+	if type(target) ~= "table" or M.current_branch() ~= target.local_branch then
+		return nil, "Branch changed since target selection; retry the operation."
+	end
+	local resolved, err
+	if operation == "push" then
+		resolved, err = M.resolve_push_target(target.override and { remote = target.remote, ref = target.ref, inspect_remote = true } or { inspect_remote = true })
+	else resolved, err = M.resolve_pull_target() end
+	if not resolved then return nil, err end
+	if resolved.remote ~= target.remote or resolved.ref ~= target.ref
+		or (operation == "push" and (resolved.endpoint ~= target.endpoint or resolved.set_upstream ~= target.set_upstream)) then
+		return nil, "Sync destination changed since selection; retry the operation."
+	end
+	if operation == "push" and resolved.requires_confirmation and not target.confirmed then
+		return nil, "Confirm first publication or explicit override to " .. target.remote .. " " .. target.ref .. "."
+	end
+	local args = { operation }
+	if operation == "push" then table.insert(args, "--no-follow-tags") end
+	if operation == "pull" and rebase then table.insert(args, "--rebase") end
+	if operation == "push" and resolved.set_upstream then table.insert(args, "--set-upstream") end
+	-- Explicit non-force refspec prevents Git's default policy from publishing extra refs.
+	vim.list_extend(args, { "--", target.remote, operation == "push" and
+		("refs/heads/" .. target.local_branch .. ":" .. target.ref) or target.ref })
+	return args
+end
+
+function M.pull_target(target, rebase)
+	local args, err = target_args(target, "pull", rebase)
+	if not args then return false, { err } end
+	return system(args)
+end
+
+function M.push_target(target)
+	local args, err = target_args(target, "push")
+	if not args then return false, { err } end
+	return system(args)
+end
+
+function M.pull_target_async(target, rebase, callback)
+	local args, err = target_args(target, "pull", rebase)
+	if not args then callback(false, { err }); return end
+	system_async(args, { loading_msg = "Pulling " .. target.remote .. " " .. target.ref .. "..." }, callback)
+end
+
+function M.push_target_async(target, callback)
+	local args, err = target_args(target, "push")
+	if not args then callback(false, { err }); return end
+	system_async(args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
 end
 
 local force_push_unavailable = "Raw force push is unavailable pending a reviewed lease-based replacement."
@@ -249,13 +482,17 @@ function M.pull_rebase_async(remote, branch, callback)
 end
 
 function M.push_async(remote, branch, callback)
-	system_async({ "push", "--set-upstream", remote, branch }, {
+	local args, err = legacy_push_args(remote, branch)
+	if not args then callback(false, { err }); return end
+	system_async(args, {
 		loading_msg = string.format("Pushing to %s/%s...", remote or "origin", branch or ""),
 	}, callback)
 end
 
 function M.push_set_upstream_async(remote, branch, callback)
-	system_async({ "push", "-u", remote, branch }, {
+	local args, err = legacy_push_args(remote, branch)
+	if not args then callback(false, { err }); return end
+	system_async(args, {
 		loading_msg = string.format("Pushing (set upstream) to %s/%s...", remote or "origin", branch or ""),
 	}, callback)
 end
@@ -298,6 +535,11 @@ function M.create_pull_request_async(opts, callback)
 	if opts.head and trim(opts.head) ~= "" then
 		table.insert(args, "--head")
 		table.insert(args, trim(opts.head))
+	end
+
+	if opts.repo and trim(opts.repo) ~= "" then
+		table.insert(args, "--repo")
+		table.insert(args, trim(opts.repo))
 	end
 
 	if opts.draft then
@@ -378,23 +620,36 @@ function M.has_local_branch(branch)
 end
 
 function M.branch_upstream(branch)
-	if not branch or branch == "" then
-		return nil
+	if not branch or branch == "" then return nil end
+	local target = upstream_target(branch)
+	if not target then return nil end
+	return { remote = target.remote, branch = target.branch }
+end
+
+local function github_repository(url)
+	local path = url:match("^https://github%.com/(.+)$") or url:match("^git@github%.com:(.+)$")
+		or url:match("^ssh://git@github%.com/(.+)$")
+	if not path then return nil end
+	path = path:gsub("/$", ""):gsub("%.git$", "")
+	local owner, name = path:match("^([%w_.-]+)/([%w_.-]+)$")
+	if not owner then return nil end
+	return { owner = owner, name = name, repo = owner .. "/" .. name }
+end
+
+-- An explicit --head disables gh's Git-config fork discovery. Preserve both
+-- repository identities when deriving the head of an already resolved push.
+function M.resolve_pr_target(target, base_remote)
+	if M.current_branch() ~= target.local_branch then return nil, "Branch changed since PR target selection; retry." end
+	local ok, urls = system({ "remote", "get-url", "--all", base_remote }, { silent = true })
+	if not ok or #urls ~= 1 then return nil, "PR base remote requires one unambiguous repository URL." end
+	local base, head = github_repository(urls[1]), github_repository(target.endpoint)
+	if base and head then
+		return { repo = base.repo, head = base.repo:lower() == head.repo:lower() and target.branch
+			or (head.owner .. ":" .. target.branch) }
 	end
-	local spec = string.format("%s@{upstream}", branch)
-	local ok, output = system({ "rev-parse", "--abbrev-ref", spec }, { silent = true })
-	if not ok or not output[1] then
-		return nil
-	end
-	local full = trim(output[1])
-	if full == "" then
-		return nil
-	end
-	local remote, upstream_branch = full:match("^([^/]+)/(.+)$")
-	if not remote or remote == "" or not upstream_branch or upstream_branch == "" then
-		return nil
-	end
-	return { remote = remote, branch = upstream_branch }
+	-- Retain same-repository operation, including local transport adapters.
+	if urls[1] == target.endpoint then return { head = target.branch } end
+	return nil, "Cannot determine base and published GitHub repository identities; configure unambiguous GitHub URLs or create the PR with gh --repo owner/repo --head user:branch."
 end
 
 function M.pr_head_branch(branch, remote)
@@ -652,6 +907,11 @@ function M.remote_branch_exists(remote, branch)
 	}, { silent = true }))
 
 	return ok
+end
+
+function M.remotes()
+	local ok, remotes = system({ "remote" }, { silent = true })
+	return ok and remotes or {}
 end
 
 function M.remote_add(name, url)
@@ -978,6 +1238,11 @@ function M.create_pull_request(opts)
 	if opts.head and trim(opts.head) ~= "" then
 		table.insert(args, "--head")
 		table.insert(args, trim(opts.head))
+	end
+
+	if opts.repo and trim(opts.repo) ~= "" then
+		table.insert(args, "--repo")
+		table.insert(args, trim(opts.repo))
 	end
 
 	if opts.draft then
