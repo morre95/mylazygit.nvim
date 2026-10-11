@@ -3,6 +3,7 @@ local observers = {}
 
 local function create_session(cwd)
 local M = {}
+local function pack(...) return { n = select("#", ...), ... } end
 local token
 local expected_intent
 
@@ -1296,10 +1297,29 @@ local key = reservation_key()
 local function in_context(owner, fn, ...)
 	local previous = token
 	token = owner
-	local result = { pcall(fn, ...) }
+	local result = pack(pcall(fn, ...))
 	token = previous
 	if not result[1] then error(result[2]) end
-	return unpack(result, 2)
+	return unpack(result, 2, result.n)
+end
+
+--- External UI providers cannot borrow the running operation's ownership.
+function M.without_mutation(fn, ...)
+	local owner, intent = token, expected_intent
+	token, expected_intent = nil, nil
+	local result = pack(pcall(fn, ...))
+	token, expected_intent = owner, intent
+	if not result[1] then error(result[2]) end
+	return unpack(result, 2, result.n)
+end
+--- Only the explicitly supplied continuation can resume the reserved workflow.
+function M.user_callback(callback)
+	local owner = token
+	return function(...)
+		return M.without_mutation(function(...)
+			return in_context(owner and reservations[key] == owner and owner or nil, callback, ...)
+		end, ...)
+	end
 end
 
 function M.on_mutation(callback)
@@ -1314,10 +1334,24 @@ end
 function M.with_expected(expected, fn, ...)
 	local previous = expected_intent
 	expected_intent = expected
-	local result = { pcall(fn, ...) }
+	local result = pack(pcall(fn, ...))
 	expected_intent = previous
 	if not result[1] then error(result[2]) end
-	return unpack(result, 2)
+	return unpack(result, 2, result.n)
+end
+
+local function operation_identity(path)
+	local stat = (vim.uv or vim.loop).fs_stat(path)
+	local parts = {}
+	local files = stat and stat.type == "directory" and { "orig-head", "onto", "head-name", "stopped-sha", "original-commit", "next", "last", "done", "git-rebase-todo", "head", "abort-safety", "todo" } or { "" }
+	for _, file in ipairs(files) do
+		local candidate = file == "" and path or path .. "/" .. file
+		if vim.fn.filereadable(candidate) == 1 then
+			local ok, content = pcall(vim.fn.readfile, candidate)
+			if ok then parts[#parts + 1] = file .. "=" .. table.concat(content, "\n") end
+		end
+	end
+	return table.concat(parts, "\n")
 end
 
 function M.repository_state()
@@ -1328,15 +1362,15 @@ function M.repository_state()
 	local _, status = system({ "status", "--porcelain" }, { silent = true })
 	local _, refs = system({ "for-each-ref", "--format=%(refname) %(objectname)", "refs" }, { silent = true })
 	local _, conflicts = system({ "diff", "--name-only", "--diff-filter=U" }, { silent = true })
-	local operation
+	local operation, operation_id
 	for _, entry in ipairs({ { "rebase-merge", "rebase" }, { "rebase-apply", "rebase" }, { "MERGE_HEAD", "merge" }, { "CHERRY_PICK_HEAD", "cherry-pick" }, { "REVERT_HEAD", "revert" }, { "sequencer", "sequencer" } }) do
 		local ok, paths = system({ "rev-parse", "--git-path", entry[1] }, { silent = true })
 		local path = ok and paths[1]
 		if path and path:sub(1, 1) ~= "/" then path = cwd .. "/" .. path end
-		if path and (vim.uv or vim.loop).fs_stat(path) then operation = entry[2]; break end
+		if path and (vim.uv or vim.loop).fs_stat(path) then operation, operation_id = entry[2], operation_identity(path); break end
 	end
 	return { head = head_ok and head[1] or nil, branch = branch_ok and branch[1] or nil, index = table.concat(index, "\n"), status = status, unstaged = table.concat(unstaged, "\n"),
-		refs = refs, conflicts = conflicts, operation = operation, running = reservations[key] and reservations[key].action or nil }
+		refs = refs, conflicts = conflicts, operation = operation, operation_id = operation_id, running = reservations[key] and reservations[key].action or nil }
 end
 
 local function recovery(state)
@@ -1352,16 +1386,21 @@ end
 local function outcome(action, status, output, before, target)
 	local current = M.repository_state()
 	return { status = status, action = action, target = target or { worktree = cwd }, diagnostics = output or {},
-		state = current, recovery = recovery(current), changed = before and (before.head ~= current.head or before.branch ~= current.branch or not vim.deep_equal(before.status, current.status) or before.index ~= current.index or before.unstaged ~= current.unstaged or not vim.deep_equal(before.refs, current.refs) or before.operation ~= current.operation) or false }
+		state = current, recovery = recovery(current), changed = before and (before.head ~= current.head or before.branch ~= current.branch or not vim.deep_equal(before.status, current.status) or before.index ~= current.index or before.unstaged ~= current.unstaged or not vim.deep_equal(before.refs, current.refs) or before.operation ~= current.operation or before.operation_id ~= current.operation_id) or false }
 end
 function M.cancel_mutation(action, target)
 	local result = outcome(action, "cancelled", { "Action cancelled" }, M.repository_state(), target)
 	return false, result.diagnostics, result
 end
 
+local function same_intent(expected, current)
+	return expected.head == current.head and expected.branch == current.branch and expected.index == current.index
+		and vim.deep_equal(expected.refs, current.refs) and expected.operation == current.operation and expected.operation_id == current.operation_id
+end
+
 function M.validate_state(expected)
 	local current = M.repository_state()
-	if expected.head ~= current.head or expected.branch ~= current.branch or expected.index ~= current.index or not vim.deep_equal(expected.refs, current.refs) or expected.operation ~= current.operation then
+	if not same_intent(expected, current) then
 		vim.notify("Branch, HEAD, staged changes or selected refs changed since selection; retry the action.", vim.log.levels.WARN, { title = "MyLazyGit" })
 		return false
 	end
@@ -1388,7 +1427,7 @@ local function reserve(action, opts)
 		reason = "Repository has an unfinished " .. (before.operation or "conflict") .. "; resolve or abort it before " .. action .. "."
 	elseif opts.expected_head and opts.expected_head ~= before.head then
 		reason = "Source commit changed since target selection; retry the operation."
-	elseif not nested and opts.expected and (opts.expected.head ~= before.head or opts.expected.branch ~= before.branch or opts.expected.index ~= before.index or not vim.deep_equal(opts.expected.refs, before.refs) or opts.expected.operation ~= before.operation) then
+	elseif not nested and opts.expected and not same_intent(opts.expected, before) then
 		reason = "Branch, HEAD or staged changes changed since selection; retry the action."
 	end
 	if reason then
@@ -1448,14 +1487,16 @@ function M.resolve_conflict(file, lines, opts)
 	end, opts)
 end
 
-function M.recover(operation, action, callback)
+function M.recover(operation, action, callback, opts)
+	opts = opts or {}
+	opts.target = opts.target or { worktree = cwd, operation = operation, recovery = action }
 	M.mutate_async("recover", function(done)
 		local current = M.repository_state()
 		if current.operation ~= operation then done(false, { "Interrupted operation changed; inspect repository and retry" }); return end
 		local allowed = action == "abort" or action == "continue" or ((operation == "rebase" or operation == "cherry-pick" or operation == "revert") and action == "skip")
 		if not allowed or not vim.tbl_contains({ "merge", "rebase", "cherry-pick", "revert" }, operation) then done(false, { "Unsupported recovery action" }); return end
 		system_async({ operation, "--" .. action }, { env = { GIT_EDITOR = "true" } }, done)
-	end, callback, { target = { worktree = cwd, operation = operation, recovery = action } })
+	end, callback, opts)
 end
 
 local function mutation_target(name, args)
@@ -1471,20 +1512,21 @@ local synchronous = { "stage", "unstage", "restore", "commit", "reset_soft", "in
 for _, name in ipairs(synchronous) do
 	local original = M[name]
 	M[name] = function(...)
-		local args = { ... }
-		return M.mutate(name, function() return original(unpack(args)) end, { target = mutation_target(name, args), expected_head = name:find("target", 1, true) and type(args[1]) == "table" and args[1].head or nil })
+		local args = pack(...)
+		return M.mutate(name, function() return original(unpack(args, 1, args.n)) end, { target = mutation_target(name, args), expected_head = name:find("target", 1, true) and type(args[1]) == "table" and args[1].head or nil })
 	end
 end
-local asynchronous = { "pull_target_async", "push_target_async", "pull_async", "pull_rebase_async", "push_async", "push_set_upstream_async", "push_force_async", "fetch_async", "create_pull_request_async", "create_github_repo_async" }
-for _, name in ipairs(asynchronous) do
+local asynchronous = { pull_target_async = 3, push_target_async = 2, pull_async = 3, pull_rebase_async = 3, push_async = 3, push_set_upstream_async = 3, push_force_async = 3, fetch_async = 2, create_pull_request_async = 2, create_github_repo_async = 2 }
+for name, callback_index in pairs(asynchronous) do
 	local original = M[name]
 	M[name] = function(...)
-		local args = { ... }
-		local callback = table.remove(args)
+		local args = pack(...)
+		local callback = args[callback_index]
+		args[callback_index] = nil
 		M.mutate_async(name, function(done)
 			local owner = token
-			args[#args + 1] = function(...) return in_context(owner, done, ...) end
-			original(unpack(args))
+			args[callback_index] = function(...) return in_context(owner, done, ...) end
+			original(unpack(args, 1, callback_index))
 		end, callback, { target = mutation_target(name, args), expected_head = name:find("target", 1, true) and type(args[1]) == "table" and args[1].head or nil })
 	end
 end

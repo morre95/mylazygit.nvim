@@ -10,6 +10,13 @@ local function create_resolver(git)
 local M = {}
 local cwd = git.worktree()
 
+local function select(items, opts, callback)
+  return git.without_mutation(vim.ui.select, items, opts, git.user_callback(callback))
+end
+local function confirm(...)
+  return git.without_mutation(vim.fn.confirm, ...)
+end
+
 -- State for the conflict resolver
 local state = {
   file_path = nil,
@@ -386,40 +393,38 @@ local function is_selected(choice, label)
   return false
 end
 
-local function run_git(args, opts, on_success, on_failure)
-  opts = opts or {}
-
-  local operation = args[1] == "commit" and "merge" or args[1]
+local function continue_operation(operation, expected, on_success, on_failure)
   git.recover(operation, "continue", function(ok, output)
     if ok then if on_success then on_success() end
     elseif on_failure then on_failure(output) end
-  end)
+  end, { expected = expected })
 end
 
 local function prompt_post_resolve(in_rebase, in_merge)
+  local expected = git.repository_state()
   if in_rebase then
-    vim.ui.select({ "Continue", "Stop here" }, {
+    select({ "Continue", "Stop here" }, {
       prompt = "File resolved and staged. Continue rebase?",
     }, function(choice)
       if not is_selected(choice, "Continue") then
         return
       end
       vim.notify("Continuing rebase...", vim.log.levels.INFO)
-      run_git({ "rebase", "--continue" }, { env = { GIT_EDITOR = "true" } }, function()
+      continue_operation("rebase", expected, function()
         vim.notify("Rebase continued successfully", vim.log.levels.INFO)
       end, function(output)
         vim.notify("Rebase continue failed:\n" .. table.concat(output, "\n"), vim.log.levels.ERROR)
       end)
     end)
   elseif in_merge then
-    vim.ui.select({ "Commit", "Stop here" }, {
+    select({ "Commit", "Stop here" }, {
       prompt = "File resolved and staged. Commit the merge?",
     }, function(choice)
       if not is_selected(choice, "Commit") then
         return
       end
       vim.notify("Committing merge...", vim.log.levels.INFO)
-      run_git({ "commit", "--no-edit" }, nil, function()
+      continue_operation("merge", expected, function()
         vim.notify("Merge committed successfully", vim.log.levels.INFO)
       end, function(output)
         vim.notify("Merge commit failed:\n" .. table.concat(output, "\n"), vim.log.levels.ERROR)
@@ -435,7 +440,7 @@ local function select_conflicted_file()
     return
   end
 
-  vim.ui.select(conflicted_files, {
+  select(conflicted_files, {
     prompt = string.format("Select conflicted file (%d files)", #conflicted_files),
   }, function(choice)
     if not choice then
@@ -462,7 +467,7 @@ local function prompt_next_conflicted_file(in_rebase, in_merge)
   local options = { "Stop here" }
   vim.list_extend(options, conflicted_files)
 
-  vim.ui.select(options, {
+  select(options, {
     prompt = string.format("Select next conflicted file (%d remaining)", #conflicted_files),
   }, function(choice)
     if not choice or choice == "Stop here" then
@@ -485,7 +490,7 @@ local function save_and_close()
 
   if unresolved > 0 then
     local choice =
-        vim.fn.confirm(string.format("%d conflict(s) unresolved. Save anyway?", unresolved), "&Yes\n&No", 2)
+        confirm(string.format("%d conflict(s) unresolved. Save anyway?", unresolved), "&Yes\n&No", 2)
     if choice ~= 1 then
       return
     end

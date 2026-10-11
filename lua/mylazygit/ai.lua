@@ -247,6 +247,12 @@ end
 
 function M.generate_commit_message(session)
 	local git = session or git_module.session()
+	local function choose(items, opts, callback)
+		return git.without_mutation(vim.ui.select, items, opts, git.user_callback(callback))
+	end
+	local function input(opts, callback)
+		return git.without_mutation(vim.ui.input, opts, git.user_callback(callback))
+	end
 	if not git.is_repo() then
 		notify("MyLazyGit AI requires a git repository", vim.log.levels.WARN)
 		return
@@ -259,7 +265,7 @@ function M.generate_commit_message(session)
 		local status_items = git.status() or {}
 		if not vim.tbl_isempty(status_items) then
 			-- Offer to stage everything so the user can immediately retry.
-			vim.ui.select({ "Yes", "No" }, {
+			choose({ "Yes", "No" }, {
 				prompt = "No staged changes detected. Stage all changes and continue?",
 			}, function(choice)
 				if not git.validate_state(expected) then emit_change("rejected", git); return end
@@ -313,7 +319,7 @@ function M.generate_commit_message(session)
 		end
 	end
 
-	vim.ui.input({
+	input({
 		prompt = "AI commit message:",
 		default = subject,
 	}, function(input)
