@@ -970,7 +970,8 @@ end
 
 for name in pairs(create_session(".")) do
 	M[name] = function(...)
-		return M.session()[name](...)
+		-- Legacy relative arguments are interpreted from the invocation directory.
+		return create_session(vim.fn.getcwd())[name](...)
 	end
 end
 

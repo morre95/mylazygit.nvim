@@ -2,6 +2,10 @@ local git_module = require("mylazygit.git")
 local resolver = {}
 local active_resolver
 
+local function conflicted_files(git)
+  return git.diff({ "--name-only", "--diff-filter=U" })
+end
+
 local function create_resolver(git)
 local M = {}
 local cwd = git.worktree()
@@ -661,7 +665,7 @@ end
 
 -- Get all files with conflicts in the repository
 function M.get_conflicted_files()
-  return git.diff({ "--name-only", "--diff-filter=U" })
+  return conflicted_files(git)
 end
 
 return M
@@ -678,7 +682,7 @@ function resolver.close()
 end
 
 function resolver.get_conflicted_files(session)
-  return (session or git_module.session()).diff({ "--name-only", "--diff-filter=U" })
+  return conflicted_files(session or git_module.session())
 end
 
 return resolver

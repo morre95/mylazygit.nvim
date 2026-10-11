@@ -811,7 +811,12 @@ local function git_push()
 end
 
 local function git_push_force()
-	notify("Raw force push is unavailable pending a reviewed lease-based replacement.", vim.log.levels.WARN)
+	local ok, output = git.push_force(config.remote, git.current_branch() or config.branch_fallback)
+	if ok then
+		M.refresh()
+	else
+		notify(table.concat(output, "\n"), vim.log.levels.WARN)
+	end
 end
 
 local function git_fetch()
