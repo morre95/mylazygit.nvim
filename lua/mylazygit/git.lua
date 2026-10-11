@@ -222,10 +222,15 @@ local function config_values(key)
 	return ok and values or {}
 end
 
-local function config_one(key)
-	local values = config_values(key)
-	if #values > 1 then return nil, "Ambiguous " .. key .. "; configure one value." end
-	return values[1]
+local function config_one(key, multiple)
+	if multiple then
+		local values = config_values(key)
+		if #values > 1 then return nil, "Ambiguous " .. key .. "; configure one value." end
+		return values[1]
+	end
+	-- Scalar configuration follows Git's scope/last-value precedence.
+	local ok, values = system({ "config", "--get", key }, { silent = true })
+	return ok and values[1] or nil
 end
 
 local function legacy_push_args(remote, refspec)
@@ -262,7 +267,7 @@ end
 local function upstream_target(branch)
 	local remote, err = config_one("branch." .. branch .. ".remote")
 	if err then return nil, err end
-	local ref; ref, err = config_one("branch." .. branch .. ".merge")
+	local ref; ref, err = config_one("branch." .. branch .. ".merge", true)
 	if err then return nil, err end
 	if not remote or not ref then return nil, "No complete upstream for " .. branch .. "; configure branch remote and merge." end
 	if not ref:match("^refs/heads/.+") then return nil, "Upstream must identify a full refs/heads/ branch." end

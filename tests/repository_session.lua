@@ -119,7 +119,6 @@ test('ambiguous push policies and detached HEAD refuse synchronization with acti
   local cases = {
     { 'push.default', { 'matching' } },
     { 'push.default', { 'nothing' } },
-    { 'branch.main.pushRemote', { 'origin', 'missing' } },
     { 'branch.main.merge', { 'refs/heads/main', 'refs/heads/other' } },
     { 'remote.origin.push', { 'refs/heads/main:refs/heads/one', 'refs/heads/main:refs/heads/two' } },
     { 'remote.origin.push', { '+refs/heads/main:refs/heads/main' } },
@@ -180,6 +179,24 @@ test('pull uses full source refs for slash remote names and custom fetch mapping
   target = assert(alice.resolve_push_target())
   equal(target.remote, 'team/upstream', 'Branch pushRemote takes priority over repository push default')
   equal(target.ref, 'refs/heads/team-topic', 'Selected upstream destination remains full source branch')
+end)
+test('repository scalar push configuration overrides global values using Git precedence', function()
+  local alice = git.session(a)
+  local original_global = vim.env.GIT_CONFIG_GLOBAL
+  local global = root .. '/global.gitconfig'
+  vim.fn.writefile({ '[push]', ' default = matching', '[remote]', ' pushDefault = missing',
+    '[branch "main"]', ' pushRemote = missing', '[remote "origin"]', ' mirror = true' }, global)
+  vim.env.GIT_CONFIG_GLOBAL = global
+  command(a, { 'config', 'push.default', 'current' })
+  command(a, { 'config', 'remote.pushDefault', 'origin' })
+  command(a, { 'config', 'branch.main.pushRemote', 'origin' })
+  command(a, { 'config', 'remote.origin.mirror', 'false' })
+  local target, err = alice.resolve_push_target()
+  assert(target, err)
+  equal(target.remote, 'origin', 'Local scalar destination overrides global configuration')
+  equal(target.ref, 'refs/heads/main', 'Local push policy overrides global matching')
+  assert(alice.push_target(target))
+  vim.env.GIT_CONFIG_GLOBAL = original_global
 end)
 test('explicit local deletion of team/task leaves the team remote task untouched', function()
   local alice = git.session(a)
