@@ -539,7 +539,7 @@ local function create_sections()
 	local right_width = inner_width - left_width - right_padding
 	local right_col = left_col + left_width + right_padding
 
-	local info_height = 2
+	local info_height = 6
 	local keymap_height = 3
 	local content_row = info_height + 1
 	local gap = 2
@@ -930,7 +930,7 @@ local function resize_layout()
 	local right_width = inner_width - left_width - right_padding
 	local right_col = left_col + left_width + right_padding
 
-	local info_height = 2
+	local info_height = 6
 	local keymap_height = 3
 	local content_row = info_height + 1
 	local gap = 2
