@@ -417,7 +417,8 @@ test('external commands use the session process directory including synchronous 
   local alice = git.session(a)
   local bin = root .. '/bin'
   vim.fn.mkdir(bin, 'p')
-  vim.fn.writefile({ '#!/bin/sh', 'pwd' }, bin .. '/gh')
+  -- Deliver the empty stderr EOF before stdout, as real job callbacks may do.
+  vim.fn.writefile({ '#!/bin/sh', 'exec 2>&-', 'sleep 0.05', 'pwd' }, bin .. '/gh')
   vim.fn.setfperm(bin .. '/gh', 'rwx------')
   local original_path, original_system = vim.env.PATH, vim.system
   vim.env.PATH = bin .. ':' .. original_path

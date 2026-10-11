@@ -45,16 +45,16 @@ local function system_external(bin, args, opts)
 	vim.list_extend(cmd, normalize_external(args or {}))
 
 	local output = {}
+	local function collect_output(_, lines)
+		-- A stream with no output still delivers a single empty EOF entry.
+		if #lines ~= 1 or lines[1] ~= "" then vim.list_extend(output, lines) end
+	end
 	local job = vim.fn.jobstart(cmd, {
 		cwd = cwd,
 		stdout_buffered = true,
 		stderr_buffered = true,
-		on_stdout = function(_, lines)
-			vim.list_extend(output, lines)
-		end,
-		on_stderr = function(_, lines)
-			vim.list_extend(output, lines)
-		end,
+		on_stdout = collect_output,
+		on_stderr = collect_output,
 	})
 	local ok = job > 0 and vim.fn.jobwait({ job })[1] == 0
 	while output[#output] == "" do table.remove(output) end
