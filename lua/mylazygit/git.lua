@@ -437,6 +437,10 @@ function M.resolve_push_target(opts)
 		end
 		target.remote_exists = exists
 		if not exists then target.requires_confirmation = true end
+		for _, line in ipairs(exists and output or {}) do
+			local oid, name = line:match("^(%x+)%s+(%S+)$")
+			if name == ref then target.remote_head = oid end
+		end
 	end
 	return target
 end
@@ -498,38 +502,40 @@ function M.push_target_async(target, callback)
 	system_async(args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
 end
 
--- History rewrites publish only against the remote commit the user reviewed.
-local function protected_branch(branch, protected)
-	for _, name in ipairs(protected or { "main" }) do
+-- Callers may add protected branches but can never unprotect main.
+local always_protected_branch = "main"
+local protected_refusal = "Protected branch %s cannot be rewritten; publish ordinary commits instead."
+
+local function is_protected_branch(branch, protected)
+	if branch == always_protected_branch then return true end
+	for _, name in ipairs(protected or {}) do
 		if name:gsub("^refs/heads/", "") == branch then return true end
 	end
 	return false
 end
 
---- opts.protected lists branch names that may never be rewritten (default { "main" }).
+-- History rewrites publish only against the remote commit the user reviewed.
+--- opts.protected lists branch names (or refs/heads/ refs) never rewritten, in addition to main.
 function M.resolve_rewrite_target(opts)
 	opts = opts or {}
-	local target, err = M.resolve_push_target({ remote = opts.remote, ref = opts.ref, inspect_remote = true })
+	local target, err = M.resolve_push_target({ inspect_remote = true })
 	if not target then return nil, err end
-	target.protected = vim.deepcopy(opts.protected or { "main" })
-	if protected_branch(target.branch, target.protected) then
-		return nil, "Protected branch " .. target.ref .. " cannot be rewritten; publish ordinary commits instead."
+	target.protected = vim.deepcopy(opts.protected or {})
+	if is_protected_branch(target.branch, target.protected) then
+		return nil, protected_refusal:format(target.ref)
 	end
-	if not target.remote_exists then
+	if not target.remote_head then
 		return nil, "No remote history at " .. target.remote .. " " .. target.ref .. " to rewrite; use ordinary push for first publication."
 	end
-	local ok, refs = system({ "ls-remote", "--heads", "--", target.endpoint, target.ref }, { silent = true })
-	local expected = ok and #refs == 1 and refs[1]:match("^(%x+)%s+" .. vim.pesc(target.ref) .. "$")
-	if not expected then return nil, "Cannot read the remote commit at " .. target.ref .. "; verify URL/authentication." end
-	target.expected = expected
+	target.expected = target.remote_head
 	return target
 end
 
 local function rewrite_args(target)
 	local resolved, err = revalidate_target(target, "push")
 	if not resolved then return nil, err end
-	if protected_branch(resolved.branch, target.protected) then
-		return nil, "Protected branch " .. resolved.ref .. " cannot be rewritten; publish ordinary commits instead."
+	if is_protected_branch(resolved.branch, target.protected) then
+		return nil, protected_refusal:format(resolved.ref)
 	end
 	if not target.expected or not target.confirmed then
 		return nil, "Review the destination and remote commit before rewriting " .. target.remote .. " " .. target.ref .. "."

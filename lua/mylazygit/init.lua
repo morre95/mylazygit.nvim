@@ -15,7 +15,7 @@ local config = {
 		main_branch = "main",
 		rebase_args = {},
 	},
-	-- Branches never rewritten by gPF, in addition to merge_workflow.main_branch.
+	-- Branches never rewritten by gPF, in addition to main and merge_workflow.main_branch.
 	protected_branches = {},
 	log_limit = 5,
 	max_commit_lines = 100,
@@ -859,13 +859,23 @@ local function git_push_rewrite()
 	local protected = vim.list_extend({ config.merge_workflow.main_branch }, config.protected_branches)
 	local target, err = git.resolve_rewrite_target({ protected = protected })
 	if not target then notify(err, vim.log.levels.WARN); return end
-	local answer = confirm(string.format("Rewrite remote %s, branch %s?\nReviewed remote commit: %s\nLocal %s replaces it only while the remote still has that commit.",
-		target.remote, target.ref, target.expected, target.local_branch), "&Rewrite\n&Cancel", 2)
-	if answer ~= 1 then notify("Rewrite cancelled"); return end
+	local review = string.format(
+		"Rewrite remote %s (%s), branch %s?\nReviewed remote commit: %s\nLocal %s commit %s replaces it only while the remote still has that commit.",
+		target.remote, target.endpoint, target.ref, target.expected, target.local_branch, target.head)
+	if confirm(review, "&Rewrite\n&Cancel", 2) ~= 1 then
+		notify("Rewrite cancelled")
+		return
+	end
 	target.confirmed = true
 	git.push_rewrite_target_async(target, function(ok, output)
-		if ok then notify("Rewrote " .. target_label(target))
-		else notify(table.concat(output, "\n") .. "\nRewrite rejected; the remote kept its history. Fetch and review again.", vim.log.levels.WARN) end
+		local message = table.concat(output, "\n")
+		if ok then
+			notify("Rewrote " .. target_label(target))
+		elseif message:find("(stale info)", 1, true) then
+			notify(message .. "\nRewrite rejected; the remote kept its history. Fetch and review again.", vim.log.levels.WARN)
+		else
+			notify(message, vim.log.levels.WARN)
+		end
 		M.refresh()
 	end)
 end
@@ -1896,7 +1906,7 @@ keymap_mappings = {
 		lhs = "gPF",
 		rhs = git_push_rewrite,
 		desc = "Rewrite with reviewed lease",
-		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the full destination ref and the remote commit it replaces; cancel is the default and changes nothing.\nGit pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmerge_workflow.main_branch and setup() protected_branches are never rewritten.",
+		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the push endpoint, the full destination ref, the remote commit it replaces and the local commit replacing it; cancel is the default and changes nothing.\nGit pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmain, merge_workflow.main_branch and setup() protected_branches are never rewritten.",
 	},
 	{
 		lhs = "f",
