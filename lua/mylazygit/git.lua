@@ -453,6 +453,10 @@ function M.resolve_push_target(opts)
 		end
 		target.remote_exists = exists
 		if not exists then target.requires_confirmation = true end
+		for _, line in ipairs(exists and output or {}) do
+			local oid, name = line:match("^(%x+)%s+(%S+)$")
+			if name == ref then target.remote_head = oid end
+		end
 	end
 	return target
 end
@@ -603,7 +607,7 @@ function M.publication_snapshot(target, limit)
 	return snapshot
 end
 
-local function target_args(target, operation, rebase)
+local function revalidate_target(target, operation)
 	if type(target) ~= "table" or M.current_branch() ~= target.local_branch then
 		return nil, "Branch changed since target selection; retry the operation."
 	end
@@ -617,6 +621,12 @@ local function target_args(target, operation, rebase)
 		or (operation == "push" and (resolved.endpoint ~= target.endpoint or resolved.set_upstream ~= target.set_upstream)) then
 		return nil, "Sync destination changed since selection; retry the operation."
 	end
+	return resolved
+end
+
+local function target_args(target, operation, rebase)
+	local resolved, err = revalidate_target(target, operation)
+	if not resolved then return nil, err end
 	if operation == "push" and resolved.requires_confirmation and not target.confirmed then
 		return nil, "Confirm first publication or explicit override to " .. target.remote .. " " .. target.ref .. "."
 	end
@@ -654,10 +664,53 @@ function M.push_target_async(target, callback)
 	system_async(args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
 end
 
-local force_push_unavailable = "Raw force push is unavailable pending a reviewed lease-based replacement."
+-- Callers may add protected branches but can never unprotect main.
+local always_protected_branch = "main"
+local protected_refusal = "Protected branch %s cannot be rewritten; publish ordinary commits instead."
 
-function M.push_force(remote, branch)
-	return false, { force_push_unavailable }
+local function is_protected_branch(branch, protected)
+	if branch == always_protected_branch then return true end
+	for _, name in ipairs(protected or {}) do
+		if name:gsub("^refs/heads/", "") == branch then return true end
+	end
+	return false
+end
+
+-- History rewrites publish only against the remote commit the user reviewed.
+--- opts.protected lists branch names (or refs/heads/ refs) never rewritten, in addition to main.
+function M.resolve_rewrite_target(opts)
+	opts = opts or {}
+	local target, err = M.resolve_push_target({ inspect_remote = true })
+	if not target then return nil, err end
+	target.protected = vim.deepcopy(opts.protected or {})
+	if is_protected_branch(target.branch, target.protected) then
+		return nil, protected_refusal:format(target.ref)
+	end
+	if not target.remote_head then
+		return nil, "No remote history at " .. target.remote .. " " .. target.ref .. " to rewrite; use ordinary push for first publication."
+	end
+	target.expected = target.remote_head
+	return target
+end
+
+local function rewrite_args(target)
+	local resolved, err = revalidate_target(target, "push")
+	if not resolved then return nil, err end
+	if is_protected_branch(resolved.branch, target.protected) then
+		return nil, protected_refusal:format(resolved.ref)
+	end
+	if not target.expected or not target.confirmed then
+		return nil, "Review the destination and remote commit before rewriting " .. target.remote .. " " .. target.ref .. "."
+	end
+	-- The lease names the reviewed commit; it is never renewed from fetched tracking refs.
+	return { "push", "--no-follow-tags", "--force-with-lease=" .. target.ref .. ":" .. target.expected,
+		"--", target.remote, "refs/heads/" .. target.local_branch .. ":" .. target.ref }
+end
+
+function M.push_rewrite_target(target)
+	local args, err = rewrite_args(target)
+	if not args then return false, { err } end
+	return system(args)
 end
 
 -- Async variants for network operations
@@ -690,8 +743,10 @@ function M.push_set_upstream_async(remote, branch, callback)
 	}, callback)
 end
 
-function M.push_force_async(remote, branch, callback)
-	callback(false, { force_push_unavailable })
+function M.push_rewrite_target_async(target, callback)
+	local args, err = rewrite_args(target)
+	if not args then callback(false, { err }); return end
+	system_async(args, { loading_msg = "Rewriting " .. target.remote .. " " .. target.ref .. "..." }, callback)
 end
 
 function M.fetch_async(remote, callback)
@@ -1677,7 +1732,7 @@ local function mutation_target(name, args)
 	return target
 end
 
-local synchronous = { "stage", "unstage", "restore", "commit", "reset_soft", "init", "commit_amend", "stash_push", "stash_pop", "stash_drop", "pull", "pull_rebase", "push", "pull_target", "push_target", "push_force", "merge", "rebase", "merge_workflow", "switch", "checkout_detached", "checkout", "switch_create", "switch_remote", "fetch_and_switch_remote", "remote_add", "remote_set_url", "delete_local_branch", "delete_branch", "rename_branch", "delete_remote_branch", "fetch", "check_conflicts", "create_pull_request" }
+local synchronous = { "stage", "unstage", "restore", "commit", "reset_soft", "init", "commit_amend", "stash_push", "stash_pop", "stash_drop", "pull", "pull_rebase", "push", "pull_target", "push_target", "push_rewrite_target", "merge", "rebase", "merge_workflow", "switch", "checkout_detached", "checkout", "switch_create", "switch_remote", "fetch_and_switch_remote", "remote_add", "remote_set_url", "delete_local_branch", "delete_branch", "rename_branch", "delete_remote_branch", "fetch", "check_conflicts", "create_pull_request" }
 for _, name in ipairs(synchronous) do
 	local original = M[name]
 	M[name] = function(...)
@@ -1685,7 +1740,7 @@ for _, name in ipairs(synchronous) do
 		return M.mutate(name, function() return original(unpack(args, 1, args.n)) end, { target = mutation_target(name, args), expected_head = name:find("target", 1, true) and type(args[1]) == "table" and args[1].head or nil })
 	end
 end
-local asynchronous = { pull_target_async = 3, push_target_async = 2, pull_async = 3, pull_rebase_async = 3, push_async = 3, push_set_upstream_async = 3, push_force_async = 3, fetch_async = 2, create_pull_request_async = 2, create_github_repo_async = 2 }
+local asynchronous = { pull_target_async = 3, push_target_async = 2, pull_async = 3, pull_rebase_async = 3, push_async = 3, push_set_upstream_async = 3, push_rewrite_target_async = 2, fetch_async = 2, create_pull_request_async = 2, create_github_repo_async = 2 }
 for name, callback_index in pairs(asynchronous) do
 	local original = M[name]
 	M[name] = function(...)
