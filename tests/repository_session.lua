@@ -36,6 +36,233 @@ end
 local tests = {}
 local function test(name, fn) tests[#tests + 1] = { name, fn } end
 local git = require('mylazygit.git')
+test('publication snapshot distinguishes tracking history with a differently named destination', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  assert(alice.push('origin', 'refs/heads/topic:refs/heads/team-topic'))
+  vim.fn.writefile({ 'local' }, a .. '/local.txt'); assert(alice.stage('local.txt')); assert(alice.commit('Local only'))
+  local snapshot = alice.publication_snapshot()
+  equal(snapshot.target.ref, 'refs/heads/team-topic', 'Uses selected push destination')
+  equal(snapshot.tracking_ref, 'refs/remotes/origin/team-topic', 'Uses full tracking ref')
+  equal(snapshot.commits[1].publication, 'local-only', 'New commit is local-only relative to tracking history')
+  equal(snapshot.commits[2].publication, 'published', 'Initial commit is confirmed in tracking history')
+end)
+test('publication remains unknown when a target or tracking evidence is absent', function()
+  local alice = git.session(a)
+  command(a, { 'config', '--unset', 'branch.main.remote' })
+  local snapshot = alice.publication_snapshot()
+  equal(snapshot.state, 'unknown', 'Absent upstream is unknown')
+  equal(snapshot.commits[1].publication, 'unknown', 'Absent upstream never confirms a commit')
+  command(a, { 'config', 'branch.main.remote', 'origin' })
+  command(a, { 'update-ref', '-d', 'refs/remotes/origin/main' })
+  snapshot = alice.publication_snapshot()
+  equal(snapshot.state, 'unknown', 'Missing tracking ref is unknown')
+  assert(snapshot.reason:find('missing', 1, true), 'Missing evidence has a reason')
+  command(a, { 'config', 'remote.origin.pushurl', b })
+  command(a, { 'fetch', 'origin' })
+  snapshot = alice.publication_snapshot()
+  equal(snapshot.state, 'unknown', 'Fetch tracking cannot describe a different push endpoint')
+end)
+test('publication fails closed on incomplete ancestry or a failed graph inspection', function()
+  local alice = git.session(a)
+  local initial = alice.repository_state().head
+  vim.fn.writefile({ initial }, a .. '/.git/shallow')
+  equal(alice.publication_snapshot().state, 'unknown', 'Shallow history cannot authorize a rewrite')
+  vim.fn.delete(a .. '/.git/shallow')
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'rev-list' then error('graph inspection unavailable') end
+    return original(cmd)
+  end
+  local snapshot = alice.publication_snapshot()
+  vim.fn.systemlist = original
+  equal(snapshot.state, 'unknown', 'Failed inspection remains unknown')
+  equal(snapshot.commits[1].publication, 'unknown', 'Failed inspection never confirms a commit')
+  assert(snapshot.reason:find('inspect', 1, true), 'Failure gives a diagnostic')
+end)
+test('publication follows custom tracking mappings and refuses excluded or shared evidence', function()
+  local alice = git.session(a)
+  command(a, { 'remote', 'rename', 'origin', 'team/upstream' })
+  command(a, { 'config', 'remote.team/upstream.fetch', '+refs/heads/team-*:refs/remotes/custom/*' })
+  assert(alice.switch_create('topic'))
+  assert(alice.push('team/upstream', 'refs/heads/topic:refs/heads/team-topic'))
+  assert(alice.fetch('team/upstream'))
+  local snapshot = alice.publication_snapshot()
+  equal(snapshot.tracking_ref, 'refs/remotes/custom/topic', 'Slash remote and custom mapping honored')
+  equal(snapshot.state, 'published', 'Mapped history confirms publication')
+  command(a, { 'config', '--add', 'remote.team/upstream.fetch', '^refs/heads/team-topic' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Excluded branch does not imply publication')
+  command(a, { 'config', '--unset-all', 'remote.team/upstream.fetch' })
+  command(a, { 'config', 'remote.team/upstream.fetch', '+refs/heads/team-*:refs/remotes/custom/*' })
+  assert(alice.remote_add('fork', b))
+  command(a, { 'config', 'remote.fork.fetch', '+refs/heads/*:refs/remotes/custom/*' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Another remote can overwrite shared tracking evidence')
+end)
+test('publication selects the fork destination independently from pull history', function()
+  local alice = git.session(a)
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', fork })
+  assert(alice.remote_add('fork', fork))
+  assert(alice.switch_create('topic'))
+  assert(alice.push('origin', 'refs/heads/topic:refs/heads/team-topic'))
+  command(a, { 'config', 'branch.topic.pushRemote', 'fork' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Pull history cannot confirm fork publication')
+  local target = assert(alice.resolve_push_target({ inspect_remote = true })); target.confirmed = true
+  assert(alice.push_target(target))
+  equal(alice.publication_snapshot().state, 'published', 'Fork tracking confirms selected destination')
+  equal(alice.publication_snapshot(assert(alice.resolve_pull_target())).state, 'published', 'Explicit pull target uses the shared classification')
+end)
+test('publication freshness records only observed target fetches and keeps cached history explicit', function()
+  local alice, bob = git.session(a), git.session(b)
+  equal(alice.publication_snapshot().freshness.state, 'unobserved', 'Pre-existing tracking has no plugin fetch evidence')
+  assert(alice.remote_add('other', b)); assert(alice.fetch('other'))
+  equal(alice.publication_snapshot().freshness.state, 'unobserved', 'Fetching another remote gives no target freshness')
+  local completed
+  alice.fetch_async('origin', function(ok) completed = ok end)
+  assert(vim.wait(5000, function() return completed ~= nil end)); assert(completed)
+  local snapshot = git.session(a).publication_snapshot()
+  equal(snapshot.freshness.state, 'cached', 'Successful async target fetch is cached evidence')
+  assert(snapshot.freshness.fetched_at, 'Fetch time is visible to callers')
+  vim.fn.writefile({ 'teammate' }, b .. '/teammate.txt'); assert(bob.stage('teammate.txt')); assert(bob.commit('Teammate')); assert(bob.push('origin', 'main'))
+  equal(alice.publication_snapshot().freshness.state, 'cached', 'Teammate advance cannot become live proof')
+  command(a, { 'fetch', 'origin' })
+  equal(alice.publication_snapshot().freshness.state, 'unobserved', 'External tracking change invalidates old evidence')
+  assert(alice.fetch('origin'))
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'fetch' then error('fetch unavailable') end
+    return original(cmd)
+  end
+  equal(alice.fetch('origin'), false, 'Failed fetch remains a failure')
+  vim.fn.systemlist = original
+  snapshot = alice.publication_snapshot()
+  equal(snapshot.freshness.state, 'failed', 'Latest fetch failure is explicit')
+  assert(snapshot.freshness.fetched_at, 'Last successful target evidence remains available')
+  equal(snapshot.state, 'published', 'Cached reachable history remains classification evidence')
+end)
+test('publication freshness does not assign a fetch time to a retained deleted target', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  assert(alice.push('origin', 'refs/heads/topic:refs/heads/topic'))
+  assert(alice.fetch('origin'))
+  equal(alice.publication_snapshot().freshness.state, 'cached', 'Fetched target is observed')
+  command(b, { 'push', 'origin', '--delete', 'topic' })
+  assert(alice.fetch('origin'))
+  equal(alice.publication_snapshot().freshness.state, 'unobserved', 'Unpruned deleted ref was not freshly fetched')
+  equal(alice.publication_snapshot().state, 'published', 'Retained tracking still describes cached publication evidence')
+end)
+test('publication HEAD classification is independent of display limit and rejects a stale selected target', function()
+  local alice = git.session(a)
+  local target = assert(alice.resolve_push_target())
+  equal(alice.publication_snapshot(target, 0).state, 'published', 'HEAD classification does not depend on displayed commits')
+  vim.fn.writefile({ 'later' }, a .. '/later.txt'); assert(alice.stage('later.txt')); assert(alice.commit('Later'))
+  equal(alice.publication_snapshot(target).state, 'unknown', 'Stale explicit source does not authorize a rewrite')
+  local current = assert(alice.resolve_push_target())
+  command(a, { 'config', 'remote.origin.pushurl', b })
+  equal(alice.publication_snapshot(current).state, 'unknown', 'Stale selected push endpoint is refused')
+end)
+test('publication cannot confirm history when HEAD inspection fails', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'local' }, a .. '/local.txt'); assert(alice.stage('local.txt')); assert(alice.commit('Local only'))
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'rev-parse' and cmd[5] == '--verify' and cmd[6] == 'HEAD' then error('HEAD inspection unavailable') end
+    return original(cmd)
+  end
+  local snapshot = alice.publication_snapshot()
+  vim.fn.systemlist = original
+  equal(snapshot.state, 'unknown', 'Missing pinned source is unknown')
+  equal(snapshot.commits[1].publication, 'unknown', 'Missing HEAD cannot render local commit as confirmed')
+  equal(snapshot.commits[2].publication, 'unknown', 'Missing HEAD cannot render previous commit as confirmed')
+  assert(snapshot.reason, 'Missing HEAD has a diagnostic')
+end)
+test('publication fails closed on ownership and target configuration query failures', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('other', remote))
+  command(a, { 'config', 'remote.other.fetch', '+refs/heads/*:refs/remotes/origin/*' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Overlapping owner is normally unknown')
+  local original = vim.fn.systemlist
+  local function inspect_with_failure(key, invalid_key)
+    vim.fn.systemlist = function(cmd)
+      if type(cmd) == 'table' and cmd[4] == 'config' and cmd[6] == key then
+        if invalid_key then return original({ 'git', 'config', '--get', 'invalid' }) end
+        error('configuration inspection unavailable')
+      end
+      return original(cmd)
+    end
+    local snapshot = alice.publication_snapshot()
+    vim.fn.systemlist = original
+    equal(snapshot.state, 'unknown', 'Failed ' .. key .. ' cannot confirm publication')
+    equal(snapshot.commits[1].publication, 'unknown', 'Failed config query keeps commit neutral')
+    assert(snapshot.reason, 'Failed config query has a diagnostic')
+  end
+  inspect_with_failure('remote.other.fetch', false)
+  inspect_with_failure('remote.other.fetch', true)
+  command(a, { 'config', '--unset-all', 'remote.other.fetch' })
+  equal(alice.publication_snapshot().state, 'published', 'Genuinely absent mapping is distinguished from inspection failure')
+  inspect_with_failure('branch.main.pushRemote', false)
+  inspect_with_failure('remote.pushDefault', true)
+  inspect_with_failure('push.default', false)
+end)
+test('publication distinguishes a missing shorthand source tag from failed tag inspection', function()
+  local alice = git.session(a)
+  command(a, { 'config', 'remote.origin.push', 'main:refs/heads/main' })
+  command(a, { 'tag', 'main' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Branch/tag source collision is refused')
+  local original = vim.fn.systemlist
+  local function failed_tag_snapshot()
+    vim.fn.systemlist = function(cmd)
+      if type(cmd) == 'table' and cmd[4] == 'show-ref' and cmd[#cmd] == 'refs/tags/main' then error('tag inspection unavailable') end
+      return original(cmd)
+    end
+    local snapshot = alice.publication_snapshot()
+    vim.fn.systemlist = original
+    equal(snapshot.state, 'unknown', 'Failed source tag inspection cannot confirm publication')
+    equal(snapshot.commits[1].publication, 'unknown', 'Failed source tag inspection keeps neutral commits')
+    assert(snapshot.reason, 'Failed source tag inspection has a diagnostic')
+  end
+  failed_tag_snapshot()
+  command(a, { 'tag', '-d', 'main' })
+  equal(alice.publication_snapshot().state, 'published', 'Verified absent tag permits unambiguous shorthand')
+  failed_tag_snapshot()
+  equal(alice.log(1)[1].message, 'Initial', 'Failed snapshot inspection leaves history intact')
+end)
+test('publication target inspection cannot inherit stale missing-remote exit status', function()
+  local alice = git.session(a)
+  local opts = { remote = 'origin', ref = 'refs/heads/first', inspect_remote = true }
+  local target = assert(alice.resolve_push_target(opts))
+  equal(target.remote_exists, false, 'Verified remote absence permits deliberate first publication')
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'ls-remote' and cmd[5] == '--exit-code' then
+      original(cmd) -- Real missing destination exits 2; the launch exception must not inherit it.
+      error('remote inspection unavailable')
+    end
+    return original(cmd)
+  end
+  local selected, reason = alice.resolve_push_target(opts)
+  vim.fn.systemlist = original
+  equal(selected, nil, 'Launcher failure is not verified destination absence')
+  assert(reason:find('inspect', 1, true), 'Remote inspection failure has a diagnostic')
+end)
+test('publication target selection refuses failed remote enumeration in first-publication simple policy', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('fork', remote))
+  command(a, { 'config', '--unset', 'branch.main.remote' })
+  command(a, { 'config', '--unset', 'branch.main.merge' })
+  command(a, { 'config', 'branch.main.pushRemote', 'fork' })
+  command(a, { 'config', 'push.default', 'simple' })
+  equal(assert(alice.resolve_push_target()).remote, 'fork', 'Verified triangular policy permits deliberate first publication')
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'remote' and #cmd == 4 then error('remote enumeration unavailable') end
+    return original(cmd)
+  end
+  local selected, reason = alice.resolve_push_target()
+  vim.fn.systemlist = original
+  equal(selected, nil, 'Failed enumeration cannot establish the selected push policy')
+  assert(reason:find('inspect', 1, true), 'Failed enumeration has a diagnostic')
+end)
 test('a running mutation rejects overlap across sessions but permits an independent linked worktree', function()
   local alice, alias = git.session(a), git.session(a .. '/.')
   local linked = root .. '/linked'
@@ -474,6 +701,50 @@ local function ui_text()
   end
   return table.concat(lines, '\n')
 end
+test('UI publication colors and descriptions use the snapshot and keep freshness visible after resizing', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'local' }, a .. '/local.txt'); assert(alice.stage('local.txt')); assert(alice.commit('Local only'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local function groups()
+    local result = {}
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.bo[buf].filetype == 'mylazygit-commits' then
+        for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_get_namespaces().mylazygit, 0, -1, { details = true })) do result[mark[2] + 1] = mark[4].hl_group end
+      end
+    end
+    return result
+  end
+  equal(groups()[1], 'MyLazyGitUnpushed', 'Local-only commit uses local color')
+  equal(groups()[2], 'MyLazyGitPushed', 'Cached published commit uses published color')
+  assert(ui_text():find('[local-only]', 1, true), 'Local-only description visible')
+  assert(ui_text():find('Fetch: unobserved', 1, true), 'Unknown fetch freshness visible')
+  assert(ui_text():find('live remote unverified', 1, true), 'Cached evidence is not live proof')
+  assert(alice.fetch('origin')); plugin.refresh()
+  assert(ui_text():find('Fetch: cached ', 1, true), 'Successful target fetch displays its time')
+  command(a, { 'config', '--unset', 'branch.main.remote' }); plugin.refresh()
+  equal(groups()[1], 'MyLazyGitUnknown', 'No upstream uses unknown color')
+  equal(groups()[2], 'MyLazyGitUnknown', 'No upstream cannot mark prior commits published')
+  assert(ui_text():find('[unknown]', 1, true), 'Unknown publication description visible')
+  ui.focus('commits'); action('gct')
+  for _, resize in ipairs({ false, true }) do
+    local headers = 0
+    if resize then vim.api.nvim_exec_autocmds('VimResized', {}) end
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      if (lines[1] or ''):find('Branch:', 1, true) or (lines[1] or ''):find('Detached HEAD', 1, true) then
+        headers = headers + 1
+        local count = #lines
+        while count > 0 and lines[count] == '' do count = count - 1 end
+        assert(vim.api.nvim_win_get_height(win) >= count, 'All header descriptions fit at creation and resize')
+      end
+    end
+    equal(headers, 1, 'Header geometry was inspected')
+  end
+  ui.close()
+end)
 test('UI reports a held publication and rejects a second mutation until completion', function()
   local alice = git.session(a)
   vim.fn.writefile({ 'publish' }, a .. '/publish.txt'); assert(alice.stage('publish.txt')); assert(alice.commit('Publish'))
@@ -1230,11 +1501,13 @@ test('legacy relative paths and dot actions retain invocation subdirectory scope
 end)
 local ok, err = xpcall(function()
   for _, entry in ipairs(tests) do
+    if not vim.env.MYLAZYGIT_TEST_FILTER or entry[1]:find(vim.env.MYLAZYGIT_TEST_FILTER, 1, true) then
     fixture()
     entry[2]()
     vim.api.nvim_set_current_dir(plugin_root)
     vim.fn.delete(root, 'rf')
     print('PASS ' .. entry[1])
+    end
   end
 end, debug.traceback)
 vim.api.nvim_set_current_dir(plugin_root)
