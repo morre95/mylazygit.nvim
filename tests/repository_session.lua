@@ -200,6 +200,45 @@ test('local UI deletion keeps safety checks and identifies force deletion separa
   vim.ui.select, vim.fn.confirm = original_select, original_confirm
   ui.close()
 end)
+test('remote deletion omits unsupported fetch mappings instead of guessing a remote branch', function()
+  local alice = git.session(a)
+  assert(alice.push('origin', 'main:topic'))
+  assert(alice.push('origin', 'main:release/topic'))
+  command(a, { 'update-ref', '-d', 'refs/remotes/origin/topic' })
+  command(a, { 'config', 'remote.origin.fetch', '+refs/heads/release/*:refs/remotes/origin/*' })
+  assert(alice.fetch('origin'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a)
+  plugin.open()
+  local original_select, original_confirm = vim.ui.select, vim.fn.confirm
+  vim.ui.select = function() error('Unsupported mapping must not offer a guessed destination') end
+  vim.fn.confirm = function() error('Unsupported mapping must not offer a deletion confirmation') end
+  local mappings = {
+    { '+refs/heads/release/*:refs/remotes/origin/*' },
+    { '+refs/heads/*:refs/remotes/origin/*', '+refs/heads/release/*:refs/remotes/origin/*' },
+    { '+refs/heads/topic:refs/remotes/origin/topic', '+refs/heads/release/topic:refs/remotes/origin/topic' },
+  }
+  for _, specs in ipairs(mappings) do
+    command(a, { 'config', '--unset-all', 'remote.origin.fetch' })
+    for _, spec in ipairs(specs) do command(a, { 'config', '--add', 'remote.origin.fetch', spec }) end
+    equal(alice.remote_branch_destinations(), {}, 'Custom or additional fetch mappings have no deletion destination')
+    action('gbx')
+    assert(notifications[#notifications]:find('standard fetch mappings', 1, true), 'Empty picker explains unsupported mappings')
+    equal(alice.remote_branch_exists('origin', 'topic'), true, 'Unrelated topic remains')
+    equal(alice.remote_branch_exists('origin', 'release/topic'), true, 'Actual mapped release/topic remains')
+  end
+  -- A custom mapping may write another configured remote's tracking namespace.
+  assert(alice.remote_add('team', remote))
+  command(a, { 'config', '--unset-all', 'remote.origin.fetch' })
+  command(a, { 'config', 'remote.origin.fetch', '+refs/heads/release/*:refs/remotes/team/*' })
+  assert(alice.fetch('origin'))
+  equal(alice.remote_branch_destinations(), {}, 'Cross-remote namespace mapping has no guessed destination')
+  action('gbx')
+  equal(alice.remote_branch_exists('team', 'topic'), true, 'Unrelated branch on canonical remote remains')
+  equal(alice.remote_branch_exists('origin', 'release/topic'), true, 'Cross-mapped source branch remains')
+  vim.ui.select, vim.fn.confirm = original_select, original_confirm
+  ui.close()
+end)
 test('delayed UI commit remains in its original repository after close and reopen', function()
   local plugin = require('mylazygit')
   local ui = require('mylazygit.ui')
