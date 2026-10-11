@@ -1847,7 +1847,7 @@ keymap_mappings = {
 	},
 	{
 		lhs = "gPp", rhs = git_push_override, desc = "Choose explicit push destination",
-		explain = { "Choose a remote and full destination branch.", "Review and confirm the full destination before first publication or override.", "Existing pull upstream is preserved; ordinary push never forces." },
+		explain = "Choose a remote and full destination branch.\nReview and confirm the full destination before first publication or override.\nExisting pull upstream is preserved; ordinary push never forces.",
 	},
 	{
 		lhs = "gPF",

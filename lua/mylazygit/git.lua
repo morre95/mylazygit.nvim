@@ -233,6 +233,20 @@ local function config_one(key, multiple)
 	return ok and values[1] or nil
 end
 
+local function push_endpoint(remote)
+	local key = "remote." .. remote .. ".mirror"
+	local bool_ok, mirror = system({ "config", "--bool", "--get", key }, { silent = true })
+	if not bool_ok and vim.v.shell_error ~= 1 then
+		return nil, "Invalid " .. key .. "; configure a valid false boolean for ordinary push."
+	end
+	if mirror[1] == "true" then
+		return nil, "Ordinary push refuses remote mirror configuration; disable " .. key .. "."
+	end
+	local ok, urls = system({ "remote", "get-url", "--push", "--all", remote }, { silent = true })
+	if not ok or #urls ~= 1 then return nil, "Ordinary push requires one configured push endpoint." end
+	return urls[1]
+end
+
 local function legacy_push_args(remote, refspec)
 	if not remote or not refspec or refspec == "" then
 		return nil, "Explicit push remote and refspec required; resolve the current branch destination."
@@ -240,13 +254,8 @@ local function legacy_push_args(remote, refspec)
 	if refspec:sub(1, 1) == "+" or refspec:sub(1, 1) == "-" then
 		return nil, "Ordinary push refuses forced refspecs or options."
 	end
-	local mirror, err = config_one("remote." .. remote .. ".mirror")
-	if err then return nil, err end
-	if mirror and mirror:lower() ~= "false" and mirror:lower() ~= "no" and mirror ~= "0" then
-		return nil, "Ordinary push refuses remote mirror configuration."
-	end
-	local ok, urls = system({ "remote", "get-url", "--push", "--all", remote }, { silent = true })
-	if not ok or #urls ~= 1 then return nil, "Ordinary push requires one configured push endpoint." end
+	local endpoint, err = push_endpoint(remote)
+	if not endpoint then return nil, err end
 	return { "push", "--no-follow-tags", "--set-upstream", "--", remote, refspec }
 end
 
@@ -285,6 +294,34 @@ function M.resolve_pull_target()
 	return target
 end
 
+local function configured_branch_destination(destination, endpoint)
+	if destination:match("^refs/heads/") then return destination end
+	if destination:match("^refs/") then return nil, "Configured push destination must identify a branch." end
+	local full = "refs/heads/" .. destination
+	if not select(1, system({ "check-ref-format", full }, { silent = true })) then
+		return nil, "Configured push destination must be a valid branch."
+	end
+	-- Git's unqualified destination can name an existing tag or be ambiguous.
+	-- Inspect its DWIM candidates before selecting a branch namespace.
+	local ok, refs = system({ "ls-remote", "--", endpoint }, { silent = true })
+	if not ok then return nil, "Cannot inspect configured push destination; verify its URL/authentication." end
+	local candidates = { [destination] = true, ["refs/" .. destination] = true,
+		["refs/tags/" .. destination] = true, [full] = true,
+		["refs/remotes/" .. destination] = true, ["refs/remotes/" .. destination .. "/HEAD"] = true }
+	local matches = {}
+	for _, line in ipairs(refs) do
+		local ref = line:match("^%S+%s+(%S+)$")
+		if ref and candidates[ref] then matches[ref] = true end
+	end
+	local names = vim.tbl_keys(matches)
+	if #names > 1 then return nil, "Configured push destination is ambiguous; use a full refs/heads/ branch." end
+	if #names == 1 then
+		if not names[1]:match("^refs/heads/") then return nil, "Configured push destination identifies a non-branch ref; use refs/heads/." end
+		return names[1]
+	end
+	return full
+end
+
 function M.resolve_push_target(opts)
 	opts = opts or {}
 	local branch = M.current_branch()
@@ -301,13 +338,8 @@ function M.resolve_push_target(opts)
 	remote = opts.remote or remote or (upstream and upstream.remote)
 	if not remote then return nil, "No push destination; use gPp to choose a remote and branch." end
 	if not M.remote_get_url(remote) then return nil, "Push remote " .. remote .. " is missing; configure its URL." end
-	local mirror; mirror, err = config_one("remote." .. remote .. ".mirror")
-	if err then return nil, err end
-	if mirror and mirror ~= "false" and mirror ~= "no" and mirror ~= "0" then
-		return nil, "Ordinary push refuses remote mirror configuration; disable remote." .. remote .. ".mirror."
-	end
-	local urls_ok, endpoints = system({ "remote", "get-url", "--push", "--all", remote }, { silent = true })
-	if not urls_ok or #endpoints ~= 1 then return nil, "Push remote has multiple or missing endpoints; configure one push URL." end
+	local endpoint; endpoint, err = push_endpoint(remote)
+	if not endpoint then return nil, err end
 	local specs = config_values("remote." .. remote .. ".push")
 	local ref = opts.ref
 	if not ref and #specs > 0 then
@@ -316,7 +348,7 @@ function M.resolve_push_target(opts)
 		if not source and (specs[1] == "HEAD" or specs[1] == branch or specs[1] == "refs/heads/" .. branch) then
 			source, destination = "refs/heads/" .. branch, "refs/heads/" .. branch
 		end
-		if not source or source:sub(1, 1) == "+" or not destination:match("^refs/heads/") then
+		if not source or source:sub(1, 1) == "+" or (destination:match("^refs/") and not destination:match("^refs/heads/")) then
 			return nil, "Unsupported or forced push refspec; configure one non-force refs/heads mapping."
 		end
 		local local_ref = "refs/heads/" .. branch
@@ -330,6 +362,11 @@ function M.resolve_push_target(opts)
 			ref = dp .. local_ref:sub(#prefix + 1, #local_ref - #suffix) .. ds
 		elseif source == local_ref or source == branch or source == "HEAD" then ref = destination
 		else return nil, "Push refspec does not map the current branch; configure its destination." end
+		if source == branch and select(1, system({ "show-ref", "--verify", "refs/tags/" .. branch }, { silent = true })) then
+			return nil, "Configured push source is ambiguous; use the full refs/heads/ source."
+		end
+		ref, err = configured_branch_destination(ref, endpoint)
+		if not ref then return nil, err end
 	end
 	if not ref then
 		local policy; policy, err = config_one("push.default")
@@ -344,7 +381,13 @@ function M.resolve_push_target(opts)
 			if upstream and upstream.remote == remote and upstream.branch ~= branch then
 				return nil, "push.default=simple refuses differently named upstream; choose a push mapping or gPp."
 			end
-			if not upstream then return nil, "push.default=simple requires an upstream; use gPp for first publication." end
+			if not upstream then
+				local remotes = M.remotes()
+				local pull_remote = #remotes == 1 and remotes[1] or "origin"
+				if remote == pull_remote then
+					return nil, "push.default=simple requires a central upstream; use gPp for first publication."
+				end
+			end
 			ref = "refs/heads/" .. branch
 		elseif policy ~= nil then return nil, "Unsupported push.default=" .. policy .. "; configure a single branch destination."
 		else ref = upstream and upstream.remote == remote and upstream.ref or ("refs/heads/" .. branch) end
@@ -353,7 +396,7 @@ function M.resolve_push_target(opts)
 		return nil, "Push destination must be a valid full refs/heads/ branch."
 	end
 	local target = { remote = remote, ref = ref, branch = ref:sub(12), local_branch = branch,
-		set_upstream = not upstream, endpoint = endpoints[1], override = opts.remote ~= nil or opts.ref ~= nil }
+		set_upstream = not upstream, endpoint = endpoint, override = opts.remote ~= nil or opts.ref ~= nil }
 	target.requires_confirmation = target.override or not upstream
 	if opts.inspect_remote then
 		local exists, output = system({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
