@@ -469,6 +469,7 @@ test('fork PR creation qualifies the actual published head owner and explicit ba
   assert(alice.switch_create('topic'))
   command(a, { 'config', 'branch.topic.remote', 'origin' })
   command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  command(a, { 'push', 'origin', 'main:topic' })
   local fork = root .. '/fork.git'
   command(root, { 'init', '--bare', '--initial-branch=main', fork })
   assert(alice.remote_add('fork', 'git@github.com:fetch-owner/project.git'))
@@ -489,7 +490,8 @@ test('fork PR creation qualifies the actual published head owner and explicit ba
   vim.fn.setfperm(bin .. '/gh', 'rwx------')
   local original_path, original_input = vim.env.PATH, vim.ui.input
   vim.env.PATH = bin .. ':' .. original_path
-  vim.ui.input = function(_, submit) submit('') end
+  local body_prompts = 0
+  vim.ui.input = function(_, submit) body_prompts = body_prompts + 1; submit('') end
   local plugin, ui = require('mylazygit'), require('mylazygit.ui')
   vim.api.nvim_set_current_dir(a); plugin.open(); action('gpr')
   vim.api.nvim_win_set_cursor(0, { 2, 0 })
@@ -501,7 +503,62 @@ test('fork PR creation qualifies the actual published head owner and explicit ba
   equal(values['--head'], 'contributor:topic', 'Fork PR head includes actual destination owner')
   equal(values['--repo'], 'upstream/project', 'PR targets explicit base repository')
   equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'main' }, 'PR creation preserves pull upstream')
+  vim.fn.delete(arguments)
+  action('gpr')
+  vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'Base: topic' })
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do if map.lhs == '<CR>' then map.callback(); break end end
+  equal(body_prompts, 2, 'Identical branch names across fork and base repositories are valid')
+  assert(vim.wait(5000, function() return vim.fn.filereadable(arguments) == 1 end), 'Same-name fork PR reaches local gh transport')
+  args = vim.fn.readfile(arguments)
+  values = {}
+  for index, arg in ipairs(args) do if arg:match('^%-%-') then values[arg] = args[index + 1] end end
+  equal(values['--base'], 'topic', 'Base branch may share its name with fork head')
+  equal(values['--head'], 'contributor:topic', 'Qualified fork identity remains intact')
   vim.env.PATH, vim.ui.input = original_path, original_input; ui.close()
+end)
+test('fork PR validates its base on the selected upstream remote when configured remote is the fork', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  command(a, { 'config', 'branch.topic.remote', 'origin' })
+  command(a, { 'config', 'branch.topic.merge', 'refs/heads/main' })
+  local fork = root .. '/fork.git'
+  command(root, { 'init', '--bare', '--initial-branch=main', fork })
+  assert(alice.remote_add('fork', 'git@github.com:fetch-owner/project.git'))
+  command(a, { 'config', 'remote.fork.pushurl', 'git@github.com:contributor/project.git' })
+  local ssh = root .. '/local-ssh'
+  vim.fn.writefile({ '#!/bin/sh', 'for arg do', ' case "$arg" in',
+    '  "git-upload-pack "*) exec git-upload-pack "' .. fork .. '" ;;',
+    '  "git-receive-pack "*) exec git-receive-pack "' .. fork .. '" ;;',
+    ' esac', 'done', 'exit 1' }, ssh)
+  vim.fn.setfperm(ssh, 'rwx------')
+  command(a, { 'config', 'core.sshCommand', ssh })
+  command(a, { 'config', 'branch.topic.pushRemote', 'fork' })
+  command(a, { 'push', 'fork', 'topic' })
+  command(a, { 'remote', 'set-url', 'origin', 'https://github.com/upstream/project.git' })
+  local bin, arguments = root .. '/bin', root .. '/gh-args'
+  vim.fn.mkdir(bin, 'p')
+  vim.fn.writefile({ '#!/bin/sh', 'printf "%s\\n" "$@" > "' .. arguments .. '"' }, bin .. '/gh')
+  vim.fn.setfperm(bin .. '/gh', 'rwx------')
+  local original_path, original_input = vim.env.PATH, vim.ui.input
+  vim.env.PATH = bin .. ':' .. original_path
+  local body_prompted = false
+  vim.ui.input = function(_, submit) body_prompted = true; submit('') end
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  command(a, { 'branch', '-d', 'main' })
+  plugin.setup({ remote = 'fork' })
+  vim.api.nvim_set_current_dir(a); plugin.open(); action('gpr')
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'i')) do if map.lhs == '<CR>' then map.callback(); break end end
+  assert(body_prompted, 'Valid upstream main proceeds despite missing local/fork main')
+  assert(vim.wait(5000, function() return vim.fn.filereadable(arguments) == 1 end), 'Local gh transport receives PR command')
+  local args = vim.fn.readfile(arguments)
+  local values = {}
+  for index, arg in ipairs(args) do if arg:match('^%-%-') then values[arg] = args[index + 1] end end
+  equal(values['--head'], 'contributor:topic', 'Fork PR head includes actual destination owner')
+  equal(values['--repo'], 'upstream/project', 'PR targets explicit base repository')
+  equal(alice.branch_upstream('topic'), { remote = 'origin', branch = 'main' }, 'PR creation preserves pull upstream')
+  vim.env.PATH, vim.ui.input = original_path, original_input; ui.close(); plugin.setup({ remote = 'origin' })
 end)
 test('fork PR creation refuses unknown repository identities before publication or form entry', function()
   local alice = git.session(a)

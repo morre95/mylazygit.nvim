@@ -898,7 +898,7 @@ local function create_pull_request()
 		return
 	end
 
-	local function prompt_pr_form(pr_target)
+	local function prompt_pr_form(pr_target, base_remote)
 		local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
 
 		helpers.centered_dual_input({
@@ -916,14 +916,14 @@ local function create_pull_request()
 				return
 			end
 
-			if base ~= "" and base == current_branch then
-				notify("Base branch cannot be the same as the current branch", vim.log.levels.WARN)
+			if base ~= "" and base == pr_target.head then
+				notify("Base branch cannot be the same as the PR head in the same repository", vim.log.levels.WARN)
 				return
 			end
 
-			if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(config.remote, base) then
+			if base ~= "" and not git.has_local_branch(base) and not git.has_remote_branch(base_remote, base) then
 				notify(
-					string.format("Base branch '%s' was not found locally or on %s", base, config.remote),
+					string.format("Base branch '%s' was not found locally or on %s", base, base_remote),
 					vim.log.levels.WARN
 				)
 				return
@@ -951,14 +951,14 @@ local function create_pull_request()
 	local pr_target; pr_target, err = git.resolve_pr_target(target, base_remote)
 	if not pr_target then notify(err, vim.log.levels.WARN); return end
 	if not target.requires_confirmation and target.remote_exists then
-		prompt_pr_form(pr_target)
+		prompt_pr_form(pr_target, base_remote)
 		return
 	end
 	choose_push_target({}, function(selected)
 		local selected_pr_target, reason = git.resolve_pr_target(selected, base_remote)
 		if not selected_pr_target then notify(reason, vim.log.levels.WARN); return end
 		push_to_target(selected, function(ok)
-			if ok then prompt_pr_form(selected_pr_target) end
+			if ok then prompt_pr_form(selected_pr_target, base_remote) end
 		end)
 	end)
 
