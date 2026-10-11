@@ -34,13 +34,16 @@ local function guarded(callback)
 	end
 end
 local prompts = {
-	input = function(opts, callback) return vim.ui.input(opts, guarded(callback)) end,
-	select = function(items, opts, callback) return vim.ui.select(items, opts, guarded(callback)) end,
+	input = function(opts, callback) return git.without_mutation(vim.ui.input, opts, git.user_callback(guarded(callback))) end,
+	select = function(items, opts, callback) return git.without_mutation(vim.ui.select, items, opts, git.user_callback(guarded(callback))) end,
 }
 local inputs = {
-	centered_input = function(opts, callback) return helpers.centered_input(opts, guarded(callback)) end,
-	centered_dual_input = function(opts, callback) return helpers.centered_dual_input(opts, guarded(callback)) end,
+	centered_input = function(opts, callback) return git.without_mutation(helpers.centered_input, opts, git.user_callback(guarded(callback))) end,
+	centered_dual_input = function(opts, callback) return git.without_mutation(helpers.centered_dual_input, opts, git.user_callback(guarded(callback))) end,
 }
+local function confirm(...)
+	return git.without_mutation(vim.fn.confirm, ...)
+end
 local state = {
 	status = {},
 	commits = {},
@@ -591,7 +594,7 @@ local function restore_all_files()
 		return
 	end
 
-	local confirmation = vim.fn.confirm(
+	local confirmation = confirm(
 		"Discard ALL unstaged changes? This cannot be undone.",
 		"&Yes\n&No",
 		2
@@ -727,7 +730,7 @@ local function choose_push_target(opts, callback, always_confirm)
 	local target, err = git.resolve_push_target(vim.tbl_extend("force", opts or {}, { inspect_remote = true }))
 	if not target then notify(err, vim.log.levels.WARN); return end
 	if target.requires_confirmation or always_confirm then
-		local answer = vim.fn.confirm(string.format("Publish %s to remote %s, branch %s?",
+		local answer = confirm(string.format("Publish %s to remote %s, branch %s?",
 			target.local_branch, target.remote, target.ref), "&Publish\n&Cancel", 2)
 		if answer ~= 1 then notify("Push cancelled"); return end
 		target.confirmed = true
@@ -873,7 +876,7 @@ local function create_github_repo()
 	end
 
 	if git.remote_get_url(config.remote) then
-		local confirm_existing = vim.fn.confirm(
+		local confirm_existing = confirm(
 			string.format("Remote '%s' already exists. Continue and let gh update it?", config.remote),
 			"&Yes\n&No",
 			2
@@ -1484,7 +1487,7 @@ local function delete_branch(force)
 			return
 		end
 		local confirmation =
-			vim.fn.confirm(string.format("%s local branch %s?", force and "Force delete" or "Delete", choice), "&Yes\n&No", 2)
+			confirm(string.format("%s local branch %s?", force and "Force delete" or "Delete", choice), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Branch deletion cancelled", vim.log.levels.INFO)
 			return
@@ -1558,7 +1561,7 @@ local function delete_remote_branch()
 		end
 
 		local remote, branch = choice.remote, choice.branch
-		local confirmation = vim.fn.confirm(
+		local confirmation = confirm(
 			string.format("Delete remote branch %s on remote %s?", branch, remote), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Remote branch deletion cancelled", vim.log.levels.INFO)
@@ -1730,7 +1733,7 @@ local function stash_drop()
 			end
 		end
 
-		local confirmation = vim.fn.confirm(string.format("Drop %s?", choice), "&Yes\n&No", 2)
+		local confirmation = confirm(string.format("Drop %s?", choice), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Stash drop cancelled", vim.log.levels.INFO)
 			return

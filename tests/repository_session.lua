@@ -150,6 +150,15 @@ test('confirmed synchronization refuses a changed source commit before publishin
   equal(result.target.ref, 'refs/heads/main', 'Refusal retains concrete destination')
   equal(git.session(remote).log(1)[1].hash, remote_before, 'Remote commit unchanged')
 end)
+test('optional nil async arguments preserve callbacks and release their reservation', function()
+  local alice = git.session(a)
+  local completed
+  alice.fetch_async(nil, function(ok, output, result) completed = { ok, result } end)
+  assert(vim.wait(1000, function() return completed end), 'Nil remote callback completes')
+  equal(completed[1], true, 'Nil remote retains origin default')
+  equal(completed[2].state.running, nil, 'Completion releases reservation')
+  assert(alice.switch_create('after-nil'), 'Repository usable after default fetch')
+end)
 test('pull and ordinary push follow a differently named upstream without publishing the local name', function()
   local alice, bob = git.session(a), git.session(b)
   command(a, { 'push', 'origin', 'main:team-topic' })
@@ -588,6 +597,25 @@ test('stage commit pull workflow stops before publication when real upstream reb
   vim.fn.prompt_setcallback, vim.fn.confirm = original_callback, original_confirm; ui.close()
 end)
 
+test('commit pull push confirmation rejects reentrant UI mutations and releases on cancellation', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'chain' }, a .. '/chain.txt')
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_callback, original_confirm, submit = vim.fn.prompt_setcallback, vim.fn.confirm
+  vim.fn.prompt_setcallback = function(_, cb) submit = cb end
+  vim.fn.confirm = function()
+    vim.fn.writefile({ 'independent action' }, a .. '/interleaved.txt')
+    action('gsa')
+    return 2
+  end
+  action('gsC'); assert(submit); submit('Chain commit')
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'Confirmation cannot lend ownership to another UI action')
+  equal(alice.repository_state().running, nil, 'Cancellation releases compound reservation')
+  equal(alice.log(1)[1].message, 'Chain commit', 'Completed commit remains after push cancellation')
+  vim.fn.prompt_setcallback, vim.fn.confirm = original_callback, original_confirm
+  ui.close()
+end)
 test('PR first publication uses its resolved differently named destination and cancellation preserves refs', function()
   local alice = git.session(a)
   assert(alice.switch_create('topic'))
@@ -990,6 +1018,30 @@ test('AI confirmation refuses changed staged content and cancellation preserves 
   submit(nil)
   equal(alice.diff({ '--cached', '--name-only' }), { 'ai.txt' }, 'Stale cancellation cannot unstage changed work')
   vim.fn.system, vim.ui.input = original_system, original_input
+end)
+test('a stale conflict recovery confirmation cannot commit a replacement merge', function()
+  local alice = git.session(a)
+  for _, branch in ipairs({ 'feature1', 'feature2' }) do
+    assert(alice.switch_create(branch))
+    vim.fn.writefile({ branch }, a .. '/file.txt'); assert(alice.stage('file.txt')); assert(alice.commit(branch))
+    assert(alice.switch('main'))
+  end
+  vim.fn.writefile({ 'main' }, a .. '/file.txt'); assert(alice.stage('file.txt')); assert(alice.commit('Main'))
+  assert(not alice.merge('feature1'))
+  local resolver = require('mylazygit.conflict')
+  local original_select, pending = vim.ui.select
+  vim.ui.select = function(_, _, cb) pending = cb end
+  resolver.open('file.txt', alice); action('a'); action('s')
+  assert(vim.wait(5000, function() return pending end), 'First merge commit confirmation opened')
+  local original_head = alice.repository_state().head
+  command(a, { 'merge', '--abort' })
+  assert(not alice.merge('feature2'))
+  vim.fn.writefile({ 'main' }, a .. '/file.txt'); command(a, { 'add', 'file.txt' })
+  pending('Commit')
+  assert(vim.wait(1000, function() return alice.repository_state().running == nil end))
+  equal(alice.repository_state().operation, 'merge', 'Replacement merge remains available for its own review')
+  equal(alice.repository_state().head, original_head, 'Old confirmation cannot commit a different merge')
+  vim.ui.select = original_select; resolver.close()
 end)
 test('conflict resolver reads writes and stages in the captured worktree', function()
   local alice = git.session(a)
