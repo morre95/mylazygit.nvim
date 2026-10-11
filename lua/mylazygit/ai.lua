@@ -235,8 +235,8 @@ local function split_subject_body(message)
 	end
 end
 
-local function unstage_all_after_cancel(git)
-	local ok = select(1, git.unstage({ "." }))
+local function unstage_all_after_cancel(git, expected)
+	local ok = select(1, git.mutate("AI cancellation", function() return git.unstage({ "." }) end, { expected = expected }))
 	if ok then
 		notify("Commit cancelled. Staged changes were unstaged.", vim.log.levels.INFO)
 		emit_change("unstage", git)
@@ -247,19 +247,28 @@ end
 
 function M.generate_commit_message(session)
 	local git = session or git_module.session()
+	local function choose(items, opts, callback)
+		return git.without_mutation(vim.ui.select, items, opts, git.user_callback(callback))
+	end
+	local function input(opts, callback)
+		return git.without_mutation(vim.ui.input, opts, git.user_callback(callback))
+	end
 	if not git.is_repo() then
 		notify("MyLazyGit AI requires a git repository", vim.log.levels.WARN)
 		return
 	end
 
+	if not git.can_mutate("generate AI commit") then return end
+	local expected = git.repository_state()
 	local diff_lines = staged_diff(git)
 	if not diff_lines then
 		local status_items = git.status() or {}
 		if not vim.tbl_isempty(status_items) then
 			-- Offer to stage everything so the user can immediately retry.
-			vim.ui.select({ "Yes", "No" }, {
+			choose({ "Yes", "No" }, {
 				prompt = "No staged changes detected. Stage all changes and continue?",
 			}, function(choice)
+				if not git.validate_state(expected) then emit_change("rejected", git); return end
 				if choice ~= "Yes" then
 					notify(
 						"No staged changes detected. Stage files before asking for a commit message.",
@@ -310,13 +319,14 @@ function M.generate_commit_message(session)
 		end
 	end
 
-	vim.ui.input({
+	input({
 		prompt = "AI commit message:",
 		default = subject,
 	}, function(input)
+		if not git.validate_state(expected) then emit_change("rejected", git); return end
 		local final_subject = input and vim.trim(input) or ""
 		if final_subject == "" then
-			unstage_all_after_cancel(git)
+			unstage_all_after_cancel(git, expected)
 			return
 		end
 
@@ -325,10 +335,12 @@ function M.generate_commit_message(session)
 			final_message = string.format("%s\n\n%s", final_subject, body)
 		end
 
-		local ok = select(1, git.commit(final_message))
+		local ok = select(1, git.mutate("AI commit", function() return git.commit(final_message) end, { expected = expected }))
 		if ok then
 			notify("Commit created with AI generated message")
 			emit_change("commit", git)
+		else
+			emit_change("failed", git)
 		end
 	end)
 end
