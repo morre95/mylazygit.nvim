@@ -389,8 +389,10 @@ function M.resolve_push_target(opts)
 		if #specs ~= 1 then return nil, "Ambiguous remote push refspecs; configure one current-branch mapping." end
 		local source, destination = specs[1]:match("^([^:]+):([^:]+)$")
 		local source_shorthand = source or specs[1]
-		if source_shorthand == branch and select(1, system({ "show-ref", "--verify", "refs/tags/" .. branch }, { silent = true })) then
-			return nil, "Configured push source is ambiguous; use the full refs/heads/ source."
+		if source_shorthand == branch then
+			local exists, output, code = system({ "show-ref", "--quiet", "--verify", "--", "refs/tags/" .. branch }, { silent = true })
+			if exists then return nil, "Configured push source is ambiguous; use the full refs/heads/ source." end
+			if code ~= 1 or #output > 0 then return nil, "Cannot inspect configured push source tag; use a full refs/heads/ source or retry." end
 		end
 		if not source and (specs[1] == "HEAD" or specs[1] == branch or specs[1] == "refs/heads/" .. branch) then
 			source, destination = "refs/heads/" .. branch, "refs/heads/" .. branch
@@ -427,7 +429,8 @@ function M.resolve_push_target(opts)
 				return nil, "push.default=simple refuses differently named upstream; choose a push mapping or gPp."
 			end
 			if not upstream then
-				local remotes = M.remotes()
+				local remotes, reason = M.remotes()
+				if reason then return nil, reason end
 				local pull_remote = #remotes == 1 and remotes[1] or "origin"
 				if remote == pull_remote then
 					return nil, "push.default=simple requires a central upstream; use gPp for first publication."
@@ -444,8 +447,8 @@ function M.resolve_push_target(opts)
 		set_upstream = not upstream, endpoint = endpoint, override = opts.remote ~= nil or opts.ref ~= nil }
 	target.requires_confirmation = target.override or not upstream
 	if opts.inspect_remote then
-		local exists, output = system({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
-		if not exists and vim.v.shell_error ~= 2 then
+		local exists, output, code = system({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
+		if not exists and (code ~= 2 or #output > 0) then
 			return nil, "Cannot inspect push destination; verify URL/authentication: " .. table.concat(output, "\n")
 		end
 		target.remote_exists = exists
@@ -1103,7 +1106,8 @@ end
 
 function M.remotes()
 	local ok, remotes = system({ "remote" }, { silent = true })
-	return ok and remotes or {}
+	if not ok then return {}, "Cannot inspect configured remotes: " .. table.concat(remotes, "\n") end
+	return remotes
 end
 
 function M.remote_add(name, url)

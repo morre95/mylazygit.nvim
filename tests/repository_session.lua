@@ -204,6 +204,65 @@ test('publication fails closed on ownership and target configuration query failu
   inspect_with_failure('remote.pushDefault', true)
   inspect_with_failure('push.default', false)
 end)
+test('publication distinguishes a missing shorthand source tag from failed tag inspection', function()
+  local alice = git.session(a)
+  command(a, { 'config', 'remote.origin.push', 'main:refs/heads/main' })
+  command(a, { 'tag', 'main' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Branch/tag source collision is refused')
+  local original = vim.fn.systemlist
+  local function failed_tag_snapshot()
+    vim.fn.systemlist = function(cmd)
+      if type(cmd) == 'table' and cmd[4] == 'show-ref' and cmd[#cmd] == 'refs/tags/main' then error('tag inspection unavailable') end
+      return original(cmd)
+    end
+    local snapshot = alice.publication_snapshot()
+    vim.fn.systemlist = original
+    equal(snapshot.state, 'unknown', 'Failed source tag inspection cannot confirm publication')
+    equal(snapshot.commits[1].publication, 'unknown', 'Failed source tag inspection keeps neutral commits')
+    assert(snapshot.reason, 'Failed source tag inspection has a diagnostic')
+  end
+  failed_tag_snapshot()
+  command(a, { 'tag', '-d', 'main' })
+  equal(alice.publication_snapshot().state, 'published', 'Verified absent tag permits unambiguous shorthand')
+  failed_tag_snapshot()
+  equal(alice.log(1)[1].message, 'Initial', 'Failed snapshot inspection leaves history intact')
+end)
+test('publication target inspection cannot inherit stale missing-remote exit status', function()
+  local alice = git.session(a)
+  local opts = { remote = 'origin', ref = 'refs/heads/first', inspect_remote = true }
+  local target = assert(alice.resolve_push_target(opts))
+  equal(target.remote_exists, false, 'Verified remote absence permits deliberate first publication')
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'ls-remote' and cmd[5] == '--exit-code' then
+      original(cmd) -- Real missing destination exits 2; the launch exception must not inherit it.
+      error('remote inspection unavailable')
+    end
+    return original(cmd)
+  end
+  local selected, reason = alice.resolve_push_target(opts)
+  vim.fn.systemlist = original
+  equal(selected, nil, 'Launcher failure is not verified destination absence')
+  assert(reason:find('inspect', 1, true), 'Remote inspection failure has a diagnostic')
+end)
+test('publication target selection refuses failed remote enumeration in first-publication simple policy', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('fork', remote))
+  command(a, { 'config', '--unset', 'branch.main.remote' })
+  command(a, { 'config', '--unset', 'branch.main.merge' })
+  command(a, { 'config', 'branch.main.pushRemote', 'fork' })
+  command(a, { 'config', 'push.default', 'simple' })
+  equal(assert(alice.resolve_push_target()).remote, 'fork', 'Verified triangular policy permits deliberate first publication')
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'remote' and #cmd == 4 then error('remote enumeration unavailable') end
+    return original(cmd)
+  end
+  local selected, reason = alice.resolve_push_target()
+  vim.fn.systemlist = original
+  equal(selected, nil, 'Failed enumeration cannot establish the selected push policy')
+  assert(reason:find('inspect', 1, true), 'Failed enumeration has a diagnostic')
+end)
 test('a running mutation rejects overlap across sessions but permits an independent linked worktree', function()
   local alice, alias = git.session(a), git.session(a .. '/.')
   local linked = root .. '/linked'
