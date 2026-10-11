@@ -25,6 +25,22 @@ local config = {
 
 local function create_controller(git)
 local M = {}
+-- Delayed choices keep their captured repository intent, including source refs and index.
+local function guarded(callback)
+	local expected = git.repository_state()
+	return function(...)
+		if not git.validate_state(expected) then M.refresh(); return end
+		return git.with_expected(expected, callback, ...)
+	end
+end
+local prompts = {
+	input = function(opts, callback) return vim.ui.input(opts, guarded(callback)) end,
+	select = function(items, opts, callback) return vim.ui.select(items, opts, guarded(callback)) end,
+}
+local inputs = {
+	centered_input = function(opts, callback) return helpers.centered_input(opts, guarded(callback)) end,
+	centered_dual_input = function(opts, callback) return helpers.centered_dual_input(opts, guarded(callback)) end,
+}
 local state = {
 	status = {},
 	commits = {},
@@ -33,6 +49,8 @@ local state = {
 		return_ref = nil,
 	},
 }
+
+git.on_mutation(function() if active_controller == M then M.refresh() end end)
 
 local bottom_view_names = {
 	local_branches = true,
@@ -216,7 +234,7 @@ local function select_multiple(files, prompt, on_done)
 			return
 		end
 
-		vim.ui.select(available, { prompt = prompt .. " (Esc to finish)" }, function(choice)
+		prompts.select(available, { prompt = prompt .. " (Esc to finish)" }, function(choice)
 			if not choice then
 				if #selected > 0 then
 					on_done(selected)
@@ -401,6 +419,10 @@ function M.refresh()
 		),
 	}
 
+	local lifecycle = git.repository_state()
+	if lifecycle.running then table.insert(layout.info.details, "Running: " .. lifecycle.running)
+	elseif lifecycle.operation or #lifecycle.conflicts > 0 then table.insert(layout.info.details, "Recovery: " .. (lifecycle.operation or "conflicts") .. " · [X] resolve · [gx] continue/abort")
+	else table.insert(layout.info.details, "Repository: ready") end
 	local pull_target, pull_error = git.resolve_pull_target()
 	local push_target, push_error = git.resolve_push_target()
 	table.insert(layout.info.details, "Pull: " .. (pull_target and (pull_target.remote .. " " .. pull_target.ref) or pull_error))
@@ -493,20 +515,19 @@ local function run_and_refresh(fn, success_msg)
 	if ok and success_msg then
 		notify(success_msg)
 	end
-	if ok then
-		M.refresh()
-	end
+	M.refresh()
 end
 
 local function run_async_and_refresh(async_fn, success_msg)
-	async_fn(function(ok)
+	async_fn(function(ok, output, result)
 		if ok and success_msg then
 			notify(success_msg)
+		elseif not ok and output then
+			notify(table.concat(output, "\n"), vim.log.levels.WARN)
 		end
-		if ok then
-			M.refresh()
-		end
+		M.refresh()
 	end)
+	M.refresh()
 end
 
 local function choose_files(prompt, predicate, cb, message_fn)
@@ -628,7 +649,7 @@ local function commit_changes()
 		return
 	end
 
-	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
+	inputs.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
 		if not msg or vim.trim(msg) == "" then
 			return
 		end
@@ -666,7 +687,7 @@ local function squash_commits()
 		table.insert(options, { index = idx, hash = entry.hash, message = entry.message })
 	end
 
-	vim.ui.select(options, {
+	prompts.select(options, {
 		prompt = "Squash commits (select oldest commit)",
 		format_item = function(item)
 			return string.format("%2d %s %s", item.index, item.hash, item.message or "")
@@ -679,18 +700,20 @@ local function squash_commits()
 		local count = choice.index
 		local default_message = build_squash_message(entries, count)
 
-		vim.ui.input({ prompt = "Commit message", default = default_message }, function(msg)
+		prompts.input({ prompt = "Commit message", default = default_message }, function(msg)
 			if not msg or vim.trim(msg) == "" then
 				notify("Squash cancelled (staged changes kept)", vim.log.levels.INFO)
 				return
 			end
 
 			run_and_refresh(function()
+				return git.mutate("squash", function()
 				local reset_ok = select(1, git.reset_soft(count))
 				if not reset_ok then
 					return false
 				end
-				return select(1, git.commit(msg))
+				return git.commit(msg)
+				end)
 			end, string.format("Squashed %d commit(s)", count))
 		end)
 	end)
@@ -735,7 +758,7 @@ local function stage_all_and_commit()
 	M.refresh()
 
 	-- Then, prompt for commit message and chain pull_rebase after commit
-	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
+	inputs.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
 		if not msg or vim.trim(msg) == "" then
 			return
 		end
@@ -765,28 +788,27 @@ local function stage_all_and_commit_and_pull()
 	M.refresh()
 
 	-- Then, prompt for commit message and chain pull_rebase after commit
-	helpers.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
+	inputs.centered_input({ prompt = "Message", title = "Create Commit" }, function(msg)
 		if not msg or vim.trim(msg) == "" then
 			return
 		end
 
-		-- Commit the changes
-		local commit_ok = select(1, git.commit(msg))
-		if not commit_ok then
-			M.refresh()
-			return
-		end
-		notify("Commit created")
-		M.refresh()
-
-		-- A failed pull ends the chain before offering publication.
-		local target, err = git.resolve_pull_target()
-		if not target then notify(err, vim.log.levels.WARN); return end
-		if not select(1, git.pull_target(target, true)) then M.refresh(); return end
-		notify("Pulled and rebased " .. target_label(target))
-		choose_push_target({}, function(push_target) push_to_target(push_target) end, true)
-
-		M.refresh()
+		run_async_and_refresh(function(cb)
+			git.mutate_async("commit pull push", function(done)
+				local committed, output = git.commit(msg)
+				if not committed then done(false, output); return end
+				local target, err = git.resolve_pull_target()
+				if not target then done(false, { err }); return end
+				local pulled; pulled, output = git.pull_target(target, true)
+				if not pulled then done(false, output); return end
+				local selected = false
+				choose_push_target({}, function(push_target)
+					selected = true
+					git.push_target_async(push_target, done)
+				end, true)
+				if not selected then done(false, { "Publication stopped after commit and pull; inspect targets and retry" }, "cancelled") end
+			end, cb)
+		end, "Committed, pulled and pushed")
 	end)
 end
 
@@ -815,9 +837,9 @@ local function git_push_override()
 	if not repo_required() then return end
 	local branch = git.current_branch()
 	if not branch then notify("Cannot push from detached HEAD; switch to a local branch.", vim.log.levels.WARN); return end
-	vim.ui.select(git.remotes(), { prompt = "Choose explicit push remote" }, function(remote)
+	prompts.select(git.remotes(), { prompt = "Choose explicit push remote" }, function(remote)
 		if not remote then return end
-		vim.ui.input({ prompt = "Destination branch: ", default = branch }, function(destination)
+		prompts.input({ prompt = "Destination branch: ", default = branch }, function(destination)
 			if not destination or vim.trim(destination) == "" then return end
 			if git.current_branch() ~= branch then notify("Branch changed since target selection; retry.", vim.log.levels.WARN); return end
 			destination = vim.trim(destination)
@@ -862,7 +884,7 @@ local function create_github_repo()
 		end
 	end
 
-	helpers.centered_dual_input({
+	inputs.centered_dual_input({
 		title = "Create GitHub Repo",
 		prompt1 = "Repository (optional: owner/name)",
 		prompt2 = "Visibility (private/public)",
@@ -901,7 +923,7 @@ local function create_pull_request()
 	local function prompt_pr_form(pr_target, base_remote)
 		local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
 
-		helpers.centered_dual_input({
+		inputs.centered_dual_input({
 			title = "Create Pull Request",
 			prompt1 = "Title",
 			prompt2 = "Base",
@@ -929,7 +951,7 @@ local function create_pull_request()
 				return
 			end
 
-			vim.ui.input({ prompt = "PR body (optional): " }, function(body)
+			prompts.input({ prompt = "PR body (optional): " }, function(body)
 				body = body or ""
 				run_async_and_refresh(function(cb)
 					git.create_pull_request_async({
@@ -1014,7 +1036,7 @@ local function resolve_conflicts()
 		conflict.open(conflicted_files[1], git)
 	else
 		-- Multiple files, let user choose
-		vim.ui.select(conflicted_files, {
+		prompts.select(conflicted_files, {
 			prompt = string.format("Select file to resolve (%d conflicts)", #conflicted_files),
 		}, function(choice)
 			if choice then
@@ -1029,7 +1051,7 @@ local function switch_new_branch()
 		return
 	end
 
-	helpers.centered_input({ prompt = "New branch", title = "Name" }, function(name)
+	inputs.centered_input({ prompt = "New branch", title = "Name" }, function(name)
 		name = name and vim.trim(name) or nil
 		if not name or name == "" then
 			return
@@ -1051,7 +1073,7 @@ local function switch_branch()
 		return
 	end
 
-	vim.ui.select(branches, { prompt = "Switch to branch" }, function(choice)
+	prompts.select(branches, { prompt = "Switch to branch" }, function(choice)
 		if not choice then
 			return
 		end
@@ -1078,7 +1100,7 @@ local function switch_remote_branch()
 		return
 	end
 
-	vim.ui.select(branches, { prompt = "Switch to remote branch" }, function(choice)
+	prompts.select(branches, { prompt = "Switch to remote branch" }, function(choice)
 		if not choice then
 			return
 		end
@@ -1094,7 +1116,7 @@ local function remote_add()
 		return
 	end
 
-	helpers.centered_dual_input({
+	inputs.centered_dual_input({
 		title = "Add remote",
 		prompt1 = "Name",
 		prompt2 = "Url",
@@ -1122,7 +1144,7 @@ local function remote_set_url()
 		remote_url = ""
 	end
 	notify(remote_url)
-	helpers.centered_dual_input({
+	inputs.centered_dual_input({
 		title = "Set remote url",
 		prompt1 = "Name",
 		prompt2 = "Url",
@@ -1166,7 +1188,7 @@ local function merge_branch()
 		return
 	end
 
-	vim.ui.select(candidates, { prompt = "Merge branch into current" }, function(choice)
+	prompts.select(candidates, { prompt = "Merge branch into current" }, function(choice)
 		if not choice then
 			return
 		end
@@ -1215,7 +1237,7 @@ local function merge_workflow()
 	end
 
 	local prompt = string.format("Workflow: merge branch into %s", main_branch)
-	vim.ui.select(candidates, { prompt = prompt }, function(choice)
+	prompts.select(candidates, { prompt = prompt }, function(choice)
 		if not choice then
 			return
 		end
@@ -1260,13 +1282,24 @@ local function rebase_branch()
 		return
 	end
 
-	vim.ui.select(candidates, { prompt = "Rebase current branch onto" }, function(choice)
+	prompts.select(candidates, { prompt = "Rebase current branch onto" }, function(choice)
 		if not choice then
 			return
 		end
 		run_and_refresh(function()
 			return select(1, git.rebase(choice))
 		end, string.format("Rebased onto %s", choice))
+	end)
+end
+
+local function recover_repository()
+	local current = git.repository_state()
+	if not current.operation then notify("No merge/rebase/cherry-pick/revert to recover", vim.log.levels.INFO); return end
+	local actions = { "continue", "abort" }
+	if current.operation ~= "merge" then table.insert(actions, "skip") end
+	prompts.select(actions, { prompt = "Recover " .. current.operation }, function(choice)
+		if not choice then return end
+		run_async_and_refresh(function(cb) git.recover(current.operation, choice, cb) end, "Recovery completed")
 	end)
 end
 
@@ -1446,7 +1479,7 @@ local function delete_branch(force)
 		return
 	end
 	local prompt = force and "Force delete local branch (-D)" or "Delete local branch (-d)"
-	vim.ui.select(candidates, { prompt = prompt }, function(choice)
+	prompts.select(candidates, { prompt = prompt }, function(choice)
 		if not choice then
 			return
 		end
@@ -1473,12 +1506,12 @@ local function rename_branch()
 		return
 	end
 
-	vim.ui.select(branches, { prompt = "Rename local branch" }, function(choice)
+	prompts.select(branches, { prompt = "Rename local branch" }, function(choice)
 		if not choice then
 			return
 		end
 
-		helpers.centered_input({ prompt = "New branch name", title = "Rename Branch", default = choice }, function(name)
+		inputs.centered_input({ prompt = "New branch name", title = "Rename Branch", default = choice }, function(name)
 			name = name and vim.trim(name) or nil
 			if not name or name == "" or name == choice then
 				return
@@ -1514,7 +1547,7 @@ local function delete_remote_branch()
 		return
 	end
 
-	vim.ui.select(branches, {
+	prompts.select(branches, {
 		prompt = "Delete remote branch",
 		format_item = function(destination)
 			return string.format("remote: %s | branch: %s", destination.remote, destination.branch)
@@ -1546,7 +1579,7 @@ local function amend_commit()
 	local entries = git.log(1)
 	local default_msg = (entries[1] and entries[1].message) or ""
 
-	helpers.centered_input({ prompt = "Amend message", title = "Amend Commit", default = default_msg }, function(msg)
+	inputs.centered_input({ prompt = "Amend message", title = "Amend Commit", default = default_msg }, function(msg)
 		if not msg then
 			return
 		end
@@ -1554,18 +1587,6 @@ local function amend_commit()
 			return select(1, git.commit_amend(msg))
 		end, "Commit amended")
 	end)
-end
-
-local function remember_return_ref()
-	if state.temp_checkout.return_ref then
-		return
-	end
-	local branch = git.current_branch()
-	if branch then
-		state.temp_checkout.return_ref = branch
-		return
-	end
-	state.temp_checkout.return_ref = git.current_head_short()
 end
 
 local function temporary_checkout_commit()
@@ -1580,10 +1601,12 @@ local function temporary_checkout_commit()
 		return
 	end
 
-	remember_return_ref()
+	local return_ref = state.temp_checkout.return_ref or git.current_branch() or git.current_head_short()
 
 	run_and_refresh(function()
-		return select(1, git.checkout_detached(entry.hash))
+		local ok, output, result = git.checkout_detached(entry.hash)
+		if ok then state.temp_checkout.return_ref = return_ref end
+		return ok, output, result
 	end, string.format("Temporarily checked out %s (detached HEAD)", entry.hash))
 end
 
@@ -1639,7 +1662,7 @@ local function stash_push()
 		return
 	end
 
-	helpers.centered_input({ prompt = "Message (optional)", title = "Stash Push" }, function(msg)
+	inputs.centered_input({ prompt = "Message (optional)", title = "Stash Push" }, function(msg)
 		if msg == nil then
 			return
 		end
@@ -1667,7 +1690,7 @@ local function stash_pop()
 		return
 	end
 
-	vim.ui.select(stashes, { prompt = "Pop stash" }, function(choice)
+	prompts.select(stashes, { prompt = "Pop stash" }, function(choice)
 		if not choice then
 			return
 		end
@@ -1695,7 +1718,7 @@ local function stash_drop()
 		return
 	end
 
-	vim.ui.select(stashes, { prompt = "Drop stash" }, function(choice)
+	prompts.select(stashes, { prompt = "Drop stash" }, function(choice)
 		if not choice then
 			return
 		end
@@ -1720,6 +1743,7 @@ local function stash_drop()
 end
 
 keymap_mappings = {
+	{ lhs = "gx", rhs = recover_repository, desc = "Recover interrupted operation", explain = "Continue or abort the actual interrupted merge, rebase, cherry-pick or revert. Resolve and stage conflicts with X first. Other mutations are rejected until recovery completes." },
 	{
 		lhs = "q",
 		rhs = ui.close,
