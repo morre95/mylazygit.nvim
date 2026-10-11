@@ -36,6 +36,59 @@ end
 local tests = {}
 local function test(name, fn) tests[#tests + 1] = { name, fn } end
 local git = require('mylazygit.git')
+test('explicit local deletion of team/task leaves the team remote task untouched', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('team', remote))
+  assert(alice.push('team', 'main:task'))
+  assert(alice.switch_create('team/task'))
+  equal(alice.current_branch(), 'team/task', 'Current local branch keeps its full name despite colliding tracking ref')
+  equal(alice.delete_local_branch('team/task', true), false, 'Force deletion refuses the current branch')
+  equal(alice.has_local_branch('team/task'), true, 'Current branch remains')
+  assert(alice.switch('main'))
+  assert(alice.delete_local_branch('team/task', false))
+  equal(alice.has_local_branch('team/task'), false, 'Local branch deleted')
+  equal(alice.remote_branch_exists('team', 'task'), true, 'Remote task remains')
+end)
+test('local force deletion still refuses a branch checked out in another worktree', function()
+  local alice = git.session(a)
+  command(a, { 'worktree', 'add', '-b', 'linked-topic', root .. '/linked' })
+  equal(alice.delete_local_branch('linked-topic', true), false, 'Force deletion respects linked worktree checkout')
+  equal(alice.has_local_branch('linked-topic'), true, 'Linked worktree branch remains')
+  equal(git.session(root .. '/linked').current_branch(), 'linked-topic', 'Linked worktree checkout remains')
+end)
+test('remote destinations retain slash remote names and full branches without guessing overlapping remotes', function()
+  local alice = git.session(a)
+  local added, add_details = alice.remote_add('team/upstream', remote)
+  assert(added, table.concat(add_details, '\n'))
+  local pushed, details = alice.push('team/upstream', 'main:feature/deep/task')
+  assert(pushed, table.concat(details, '\n'))
+  local target = { remote = 'team/upstream', branch = 'feature/deep/task' }
+  local found = false
+  for _, destination in ipairs(alice.remote_branch_destinations()) do
+    if vim.deep_equal(destination, target) then found = true end
+  end
+  assert(found, 'Destination separates configured remote from full branch')
+  -- New Git rejects this via remote add; existing/manual config can still overlap.
+  command(a, { 'config', 'remote.team.url', remote })
+  command(a, { 'config', 'remote.team.fetch', '+refs/heads/*:refs/remotes/team/*' })
+  for _, destination in ipairs(alice.remote_branch_destinations()) do
+    assert(destination.remote ~= 'team' and destination.remote ~= 'team/upstream', 'Ambiguous tracking ref is excluded')
+  end
+end)
+test('remote deletion removes the full branch while preserving its local branch and same-named remote tag', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('feature/deep/task'))
+  assert(alice.switch('main'))
+  command(a, { 'tag', 'feature/deep/task' })
+  assert(alice.push('origin', 'refs/heads/feature/deep/task:refs/heads/feature/deep/task'))
+  assert(alice.push('origin', 'refs/tags/feature/deep/task:refs/tags/feature/deep/task'))
+  local deleted, details = alice.delete_remote_branch('origin', 'feature/deep/task')
+  assert(deleted, table.concat(details, '\n'))
+  equal(alice.remote_branch_exists('origin', 'feature/deep/task'), false, 'Remote branch removed')
+  equal(alice.has_local_branch('feature/deep/task'), true, 'Local branch remains')
+  local tag_ok, tag_output = alice.push('origin', 'refs/tags/feature/deep/task:refs/tags/feature/deep/task')
+  assert(tag_ok and table.concat(tag_output, '\n'):find('Everything up%-to%-date'), 'Remote tag remains unchanged')
+end)
 test('independent sessions stage and commit in their captured repository after cwd changes', function()
   local alice, bob = git.session(a), git.session(b)
   vim.fn.writefile({ 'alice change' }, a .. '/alice.txt')
@@ -63,6 +116,129 @@ local function ui_text()
   end
   return table.concat(lines, '\n')
 end
+test('dedicated remote deletion confirms the exact destination and cancellation changes no refs', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('team/upstream', remote))
+  assert(alice.push('team/upstream', 'main:feature/deep/task'))
+  assert(alice.switch_create('feature/deep/task'))
+  assert(alice.switch('main'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  plugin.setup()
+  vim.api.nvim_set_current_dir(a)
+  plugin.open()
+  local original_select, original_confirm = vim.ui.select, vim.fn.confirm
+  local cancel_picker, confirmation, confirmations = true, 2, 0
+  vim.ui.select = function(items, opts, submit)
+    equal(opts.prompt, 'Delete remote branch', 'Dedicated action picker')
+    local target
+    for _, destination in ipairs(items) do
+      if type(destination) == 'table' and destination.remote == 'team/upstream' and destination.branch == 'feature/deep/task' then
+        target = destination
+      end
+    end
+    assert(target, 'Picker carries the separate remote and full branch')
+    equal(opts.format_item(target), 'remote: team/upstream | branch: feature/deep/task', 'Picker disambiguates destination')
+    if cancel_picker then submit(nil) else submit(target) end
+  end
+  vim.fn.confirm = function(message, _, default)
+    confirmations = confirmations + 1
+    equal(message, 'Delete remote branch feature/deep/task on remote team/upstream?', 'Exact destination confirmation')
+    equal(default, 2, 'Confirmation defaults to cancellation')
+    return confirmation
+  end
+  action('gbx')
+  equal(confirmations, 0, 'Picker cancellation does not confirm')
+  equal(alice.remote_branch_exists('team/upstream', 'feature/deep/task'), true, 'Picker cancellation leaves remote ref')
+  cancel_picker = false
+  action('gbx')
+  equal(alice.remote_branch_exists('team/upstream', 'feature/deep/task'), true, 'Confirmation cancellation leaves remote ref')
+  equal(alice.has_local_branch('feature/deep/task'), true, 'Cancellation leaves local ref')
+  confirmation = 1
+  action('gbx')
+  equal(alice.remote_branch_exists('team/upstream', 'feature/deep/task'), false, 'Confirmed remote destination deleted')
+  equal(alice.has_local_branch('feature/deep/task'), true, 'Remote action leaves local ref')
+  vim.ui.select, vim.fn.confirm = original_select, original_confirm
+  ui.close()
+end)
+test('local UI deletion keeps safety checks and identifies force deletion separately', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('team', remote))
+  assert(alice.push('team', 'main:task'))
+  assert(alice.switch_create('team/task'))
+  vim.fn.writefile({ 'unique commit' }, a .. '/topic.txt')
+  assert(alice.stage('topic.txt'))
+  assert(alice.commit('Unmerged topic'))
+  assert(alice.switch('main'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a)
+  plugin.open()
+  local original_select, original_confirm = vim.ui.select, vim.fn.confirm
+  local force, confirmation = false, 2
+  vim.ui.select = function(items, opts, submit)
+    equal(opts.prompt, force and 'Force delete local branch (-D)' or 'Delete local branch (-d)', 'Local deletion scope is explicit')
+    assert(not vim.tbl_contains(items, 'main'), 'Current branch is excluded from deletion picker')
+    assert(vim.tbl_contains(items, 'team/task'), 'Slash-named local branch is selectable')
+    submit('team/task')
+  end
+  vim.fn.confirm = function(message, _, default)
+    equal(message, force and 'Force delete local branch team/task?' or 'Delete local branch team/task?', 'Local confirmation identifies force separately')
+    equal(default, 2, 'Local confirmation defaults to cancellation')
+    return confirmation
+  end
+  action('gbd')
+  equal(alice.has_local_branch('team/task'), true, 'Safe cancellation preserves local branch')
+  confirmation = 1
+  action('gbd')
+  equal(alice.has_local_branch('team/task'), true, 'Safe deletion refuses unmerged branch')
+  force, confirmation = true, 2
+  action('gbD')
+  equal(alice.has_local_branch('team/task'), true, 'Force cancellation preserves local branch')
+  confirmation = 1
+  action('gbD')
+  equal(alice.has_local_branch('team/task'), false, 'Explicit force deletion removes unmerged local branch')
+  equal(alice.remote_branch_exists('team', 'task'), true, 'Local deletion never touches remote task')
+  vim.ui.select, vim.fn.confirm = original_select, original_confirm
+  ui.close()
+end)
+test('remote deletion omits unsupported fetch mappings instead of guessing a remote branch', function()
+  local alice = git.session(a)
+  assert(alice.push('origin', 'main:topic'))
+  assert(alice.push('origin', 'main:release/topic'))
+  command(a, { 'update-ref', '-d', 'refs/remotes/origin/topic' })
+  command(a, { 'config', 'remote.origin.fetch', '+refs/heads/release/*:refs/remotes/origin/*' })
+  assert(alice.fetch('origin'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a)
+  plugin.open()
+  local original_select, original_confirm = vim.ui.select, vim.fn.confirm
+  vim.ui.select = function() error('Unsupported mapping must not offer a guessed destination') end
+  vim.fn.confirm = function() error('Unsupported mapping must not offer a deletion confirmation') end
+  local mappings = {
+    { '+refs/heads/release/*:refs/remotes/origin/*' },
+    { '+refs/heads/*:refs/remotes/origin/*', '+refs/heads/release/*:refs/remotes/origin/*' },
+    { '+refs/heads/topic:refs/remotes/origin/topic', '+refs/heads/release/topic:refs/remotes/origin/topic' },
+  }
+  for _, specs in ipairs(mappings) do
+    command(a, { 'config', '--unset-all', 'remote.origin.fetch' })
+    for _, spec in ipairs(specs) do command(a, { 'config', '--add', 'remote.origin.fetch', spec }) end
+    equal(alice.remote_branch_destinations(), {}, 'Custom or additional fetch mappings have no deletion destination')
+    action('gbx')
+    assert(notifications[#notifications]:find('standard fetch mappings', 1, true), 'Empty picker explains unsupported mappings')
+    equal(alice.remote_branch_exists('origin', 'topic'), true, 'Unrelated topic remains')
+    equal(alice.remote_branch_exists('origin', 'release/topic'), true, 'Actual mapped release/topic remains')
+  end
+  -- A custom mapping may write another configured remote's tracking namespace.
+  assert(alice.remote_add('team', remote))
+  command(a, { 'config', '--unset-all', 'remote.origin.fetch' })
+  command(a, { 'config', 'remote.origin.fetch', '+refs/heads/release/*:refs/remotes/team/*' })
+  assert(alice.fetch('origin'))
+  equal(alice.remote_branch_destinations(), {}, 'Cross-remote namespace mapping has no guessed destination')
+  action('gbx')
+  equal(alice.remote_branch_exists('team', 'topic'), true, 'Unrelated branch on canonical remote remains')
+  equal(alice.remote_branch_exists('origin', 'release/topic'), true, 'Cross-mapped source branch remains')
+  vim.ui.select, vim.fn.confirm = original_select, original_confirm
+  ui.close()
+end)
 test('delayed UI commit remains in its original repository after close and reopen', function()
   local plugin = require('mylazygit')
   local ui = require('mylazygit.ui')
@@ -280,7 +456,8 @@ test('external commands use the session process directory including synchronous 
   local alice = git.session(a)
   local bin = root .. '/bin'
   vim.fn.mkdir(bin, 'p')
-  vim.fn.writefile({ '#!/bin/sh', 'pwd' }, bin .. '/gh')
+  -- Deliver the empty stderr EOF before stdout, as real job callbacks may do.
+  vim.fn.writefile({ '#!/bin/sh', 'exec 2>&-', 'sleep 0.05', 'pwd' }, bin .. '/gh')
   vim.fn.setfperm(bin .. '/gh', 'rwx------')
   local original_path, original_system = vim.env.PATH, vim.system
   vim.env.PATH = bin .. ':' .. original_path

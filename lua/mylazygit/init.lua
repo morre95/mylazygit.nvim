@@ -1455,20 +1455,20 @@ local function delete_branch(force)
 		notify("No other branches to delete", vim.log.levels.WARN)
 		return
 	end
-	local prompt = force and "Force delete branch (-D)" or "Delete branch (-d)"
+	local prompt = force and "Force delete local branch (-D)" or "Delete local branch (-d)"
 	vim.ui.select(candidates, { prompt = prompt }, function(choice)
 		if not choice then
 			return
 		end
 		local confirmation =
-			vim.fn.confirm(string.format("%s branch %s?", force and "Force delete" or "Delete", choice), "&Yes\n&No", 2)
+			vim.fn.confirm(string.format("%s local branch %s?", force and "Force delete" or "Delete", choice), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Branch deletion cancelled", vim.log.levels.INFO)
 			return
 		end
 		run_and_refresh(function()
-			return select(1, git.delete_branch(choice, force))
-		end, string.format("%s branch %s", force and "Force deleted" or "Deleted", choice))
+			return select(1, git.delete_local_branch(choice, force))
+		end, string.format("%s local branch %s", force and "Force deleted" or "Deleted", choice))
 	end)
 end
 
@@ -1518,24 +1518,25 @@ local function delete_remote_branch()
 		return
 	end
 
-	local branches = git.remote_branches()
+	local branches = git.remote_branch_destinations()
 	if vim.tbl_isempty(branches) then
-		notify("No remote branches found", vim.log.levels.WARN)
+		notify("No remote deletion destinations available. Only standard fetch mappings and unambiguous remote names are supported.", vim.log.levels.WARN)
 		return
 	end
 
-	vim.ui.select(branches, { prompt = "Delete remote branch" }, function(choice)
+	vim.ui.select(branches, {
+		prompt = "Delete remote branch",
+		format_item = function(destination)
+			return string.format("remote: %s | branch: %s", destination.remote, destination.branch)
+		end,
+	}, function(choice)
 		if not choice then
 			return
 		end
 
-		local remote, branch = choice:match("^([^/]+)/(.+)$")
-		if not remote or not branch then
-			notify(string.format("Invalid remote branch: %s", choice), vim.log.levels.ERROR)
-			return
-		end
-
-		local confirmation = vim.fn.confirm(string.format("Delete remote branch %s?", choice), "&Yes\n&No", 2)
+		local remote, branch = choice.remote, choice.branch
+		local confirmation = vim.fn.confirm(
+			string.format("Delete remote branch %s on remote %s?", branch, remote), "&Yes\n&No", 2)
 		if confirmation ~= 1 then
 			notify("Remote branch deletion cancelled", vim.log.levels.INFO)
 			return
@@ -1543,7 +1544,7 @@ local function delete_remote_branch()
 
 		run_and_refresh(function()
 			return select(1, git.delete_remote_branch(remote, branch))
-		end, string.format("Deleted remote branch %s", choice))
+		end, string.format("Deleted remote branch %s on remote %s", branch, remote))
 	end)
 end
 
@@ -1942,20 +1943,20 @@ keymap_mappings = {
 	{
 		lhs = "gbd",
 		rhs = delete_branch_safe,
-		desc = "Delete branch",
-		explain = "Delete a local branch safely (git branch -d <name>).\nGit will refuse to delete the branch if it has unmerged changes.\nYou cannot delete the currently checked-out branch.\nA confirmation prompt is shown before deletion.",
+		desc = "Delete local branch safely",
+		explain = "Delete a local branch safely (git branch -d <name>).\nLocal names containing slashes stay local, even when they resemble remote branches.\nGit refuses unmerged branches and branches checked out in any worktree.\nA confirmation prompt is shown before deletion.",
 	},
 	{
 		lhs = "gbD",
 		rhs = delete_branch_force,
-		desc = "Delete branch force",
-		explain = "Force-delete a local branch (git branch -D <name>).\nThis deletes the branch even if it has unmerged changes.\nA confirmation prompt is shown before deletion.\n\nWarning: any commits unique to that branch will become unreachable and may be garbage-collected.",
+		desc = "Force delete local branch",
+		explain = "Force-delete a local branch (git branch -D <name>).\nThis deletes unmerged local branches after a separate force confirmation.\nBranches checked out in any worktree remain protected.\nRemote branches are unaffected.\n\nWarning: any commits unique to that branch will become unreachable and may be garbage-collected.",
 	},
 	{
 		lhs = "gbx",
 		rhs = delete_remote_branch,
 		desc = "Delete remote branch",
-		explain = "Delete a remote branch (git push <remote> --delete <branch>).\nOpens a picker with remote branches like origin/feature-x and asks for confirmation before deletion.",
+		explain = "Delete a remote branch (git push <remote> --delete refs/heads/<branch>).\nThe dedicated picker and confirmation show the configured remote and full branch name separately.\nTracking refs matching overlapping remote names are omitted rather than guessed.\nEvery configured remote must have exactly one standard fetch mapping: refs/heads/* to refs/remotes/<remote>/*.\nCustom, additional or missing mappings leave the entire deletion picker empty because they may populate another remote's namespace.\nCancellation changes no refs; local branches and same-named remote tags are unaffected.",
 	},
 	{
 		lhs = "gbm",

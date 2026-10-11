@@ -45,16 +45,16 @@ local function system_external(bin, args, opts)
 	vim.list_extend(cmd, normalize_external(args or {}))
 
 	local output = {}
+	local function collect_output(_, lines)
+		-- A stream with no output still delivers a single empty EOF entry.
+		if #lines ~= 1 or lines[1] ~= "" then vim.list_extend(output, lines) end
+	end
 	local job = vim.fn.jobstart(cmd, {
 		cwd = cwd,
 		stdout_buffered = true,
 		stderr_buffered = true,
-		on_stdout = function(_, lines)
-			vim.list_extend(output, lines)
-		end,
-		on_stderr = function(_, lines)
-			vim.list_extend(output, lines)
-		end,
+		on_stdout = collect_output,
+		on_stderr = collect_output,
 	})
 	local ok = job > 0 and vim.fn.jobwait({ job })[1] == 0
 	while output[#output] == "" do table.remove(output) end
@@ -550,14 +550,14 @@ function M.fetch_and_switch_remote(remote_branch)
 end
 
 function M.branches()
-	local ok, output = system({ "branch", "--format", "%(refname:short)" }, { silent = true })
+	local ok, output = system({ "branch", "--format", "%(refname)" }, { silent = true })
 	if not ok then
 		return {}
 	end
 
 	local branches = {}
 	for _, line in ipairs(output) do
-		local name = trim(line)
+		local name = trim(line):gsub("^refs/heads/", "")
 		if name ~= "" then
 			table.insert(branches, name)
 		end
@@ -583,6 +583,47 @@ function M.remote_branches()
 
 	table.sort(branches)
 	return branches
+end
+
+-- A tracking ref is selectable only when one configured remote owns its prefix.
+-- Overlapping remote names (team and team/upstream) must not imply a destination.
+function M.remote_branch_destinations()
+	local remotes_ok, remotes = system({ "remote" }, { silent = true })
+	if not remotes_ok then
+		return {}
+	end
+	-- A custom mapping can populate any remote's namespace. Fail closed unless
+	-- every configured remote has exactly the standard branch-to-tracking map.
+	for _, remote in ipairs(remotes) do
+		local ok, specs = system({ "config", "--get-all", "remote." .. remote .. ".fetch" }, { silent = true })
+		local canonical = "refs/heads/*:refs/remotes/" .. remote .. "/*"
+		if not ok or #specs ~= 1 or (specs[1] ~= canonical and specs[1] ~= "+" .. canonical) then
+			return {}
+		end
+	end
+	local refs_ok, refs = system({ "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes/" }, { silent = true })
+	if not refs_ok then
+		return {}
+	end
+
+	local destinations = {}
+	for _, line in ipairs(refs) do
+		local ref, symbolic = line:match("^(%S+)%s*(.*)$")
+		if ref and symbolic == "" then
+			local destination, matches = nil, 0
+			for _, remote in ipairs(remotes) do
+				local prefix = "refs/remotes/" .. remote .. "/"
+				if ref:sub(1, #prefix) == prefix then
+					matches = matches + 1
+					destination = { remote = remote, branch = ref:sub(#prefix + 1) }
+				end
+			end
+			if matches == 1 then
+				table.insert(destinations, destination)
+			end
+		end
+	end
+	return destinations
 end
 
 function M.has_remote_branch(remote, branch)
@@ -634,7 +675,7 @@ function M.remote_get_url(name)
 	return nil
 end
 
-function M.delete_branch(name, force)
+function M.delete_local_branch(name, force)
 	if not name or name == "" then
 		return false, { "Branch name required" }
 	end
@@ -642,6 +683,9 @@ function M.delete_branch(name, force)
 	local flag = force and "-D" or "-d"
 	return system({ "branch", flag, name })
 end
+
+-- Preserve the legacy local-only entry point.
+M.delete_branch = M.delete_local_branch
 
 function M.rename_branch(old_name, new_name)
 	old_name = trim(old_name or "")
@@ -668,7 +712,7 @@ function M.delete_remote_branch(remote, branch)
 		return false, { "Branch name required" }
 	end
 
-	return system({ "push", remote, "--delete", branch })
+	return system({ "push", remote, "--delete", "refs/heads/" .. branch })
 end
 
 local function upstream_ref(remote, branch)
@@ -794,15 +838,11 @@ function M.log_patch(hash)
 end
 
 function M.current_branch()
-	local ok, output = system({ "rev-parse", "--abbrev-ref", "HEAD" }, { silent = true })
+	local ok, output = system({ "symbolic-ref", "--quiet", "HEAD" }, { silent = true })
 	if not ok or #output == 0 then
 		return nil
 	end
-	local branch = trim(output[1])
-	if branch == "HEAD" then
-		return nil
-	end
-	return branch
+	return trim(output[1]):match("^refs/heads/(.+)$")
 end
 
 function M.current_head_short()
