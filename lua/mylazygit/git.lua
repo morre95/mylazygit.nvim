@@ -43,14 +43,15 @@ local function system(args, opts)
 	token, expected_intent = nil, nil
 	local launched, output = pcall(vim.fn.systemlist, cmd)
 	token, expected_intent = owner, intent
-	local ok = launched and vim.v.shell_error == 0
+	local code = launched and vim.v.shell_error or nil
+	local ok = code == 0
 	for name, value in pairs(saved) do vim.env[name] = value or nil end
 	if not launched then output = { tostring(output) } end
 	if not ok and not opts.silent then
 		vim.notify(table.concat(output, "\n"), vim.log.levels.ERROR, { title = "MyLazyGit" })
 	end
 
-	return ok, output
+	return ok, output, code
 end
 
 local function system_external(bin, args, opts)
@@ -245,26 +246,30 @@ function M.stash_list()
 end
 
 -- Targets use remote-side full refs, independent of fetch/tracking namespaces.
+local function inspect_config(key, all)
+	local ok, values, code = system({ "config", all and "--get-all" or "--get", key }, { silent = true })
+	if ok then return values end
+	-- Exit 1 only establishes absence when Git actually ran and emitted no error.
+	if code == 1 and (#values == 0 or (#values == 1 and values[1] == "")) then return {} end
+	return {}, "Cannot inspect " .. key .. ": " .. table.concat(values, "\n")
+end
+
 local function config_values(key)
-	local ok, values = system({ "config", "--get-all", key }, { silent = true })
-	return ok and values or {}
+	return inspect_config(key, true)
 end
 
 local function config_one(key, multiple)
-	if multiple then
-		local values = config_values(key)
-		if #values > 1 then return nil, "Ambiguous " .. key .. "; configure one value." end
-		return values[1]
-	end
+	local values, err = inspect_config(key, multiple)
+	if err then return nil, err end
+	if multiple and #values > 1 then return nil, "Ambiguous " .. key .. "; configure one value." end
 	-- Scalar configuration follows Git's scope/last-value precedence.
-	local ok, values = system({ "config", "--get", key }, { silent = true })
-	return ok and values[1] or nil
+	return values[1]
 end
 
 local function push_endpoint(remote)
 	local key = "remote." .. remote .. ".mirror"
-	local bool_ok, mirror = system({ "config", "--bool", "--get", key }, { silent = true })
-	if not bool_ok and vim.v.shell_error ~= 1 then
+	local bool_ok, mirror, code = system({ "config", "--bool", "--get", key }, { silent = true })
+	if not bool_ok and (code ~= 1 or #mirror > 0) then
 		return nil, "Invalid " .. key .. "; configure a valid false boolean for ordinary push."
 	end
 	if mirror[1] == "true" then
@@ -303,9 +308,9 @@ end
 
 local function upstream_target(branch)
 	local remote, err = config_one("branch." .. branch .. ".remote")
-	if err then return nil, err end
+	if err then return nil, err, true end
 	local ref; ref, err = config_one("branch." .. branch .. ".merge", true)
-	if err then return nil, err end
+	if err then return nil, err, true end
 	if not remote or not ref then return nil, "No complete upstream for " .. branch .. "; configure branch remote and merge." end
 	if not ref:match("^refs/heads/.+") then return nil, "Upstream must identify a full refs/heads/ branch." end
 	return { remote = remote, ref = ref, branch = ref:sub(12), local_branch = branch }
@@ -313,6 +318,7 @@ end
 
 function M.resolve_pull_target()
 	local selected_head = head_oid()
+	if not selected_head then return nil, "Cannot inspect source HEAD; publication state is unknown." end
 	local branch = M.current_branch()
 	if not branch then return nil, "Cannot pull from detached HEAD; switch to a local branch." end
 	local target, err = upstream_target(branch)
@@ -354,13 +360,18 @@ end
 
 function M.resolve_push_target(opts)
 	local selected_head = head_oid()
+	if not selected_head then return nil, "Cannot inspect source HEAD; publication state is unknown." end
 	opts = opts or {}
 	local branch = M.current_branch()
 	if not branch then return nil, "Cannot push from detached HEAD; switch to a local branch." end
-	local upstream, upstream_error = upstream_target(branch)
+	local upstream, upstream_error, invalid_upstream = upstream_target(branch)
+	if invalid_upstream then return nil, upstream_error end
 	-- Partial/multiple upstream configuration is not an invitation to guess.
-	local has_upstream_config = #config_values("branch." .. branch .. ".remote") > 0
-		or #config_values("branch." .. branch .. ".merge") > 0
+	local upstream_remotes, err = config_values("branch." .. branch .. ".remote")
+	if err then return nil, err end
+	local upstream_refs; upstream_refs, err = config_values("branch." .. branch .. ".merge")
+	if err then return nil, err end
+	local has_upstream_config = #upstream_remotes > 0 or #upstream_refs > 0
 	if has_upstream_config and not upstream then return nil, upstream_error end
 	local remote, err = config_one("branch." .. branch .. ".pushRemote")
 	if err then return nil, err end
@@ -371,7 +382,8 @@ function M.resolve_push_target(opts)
 	if not M.remote_get_url(remote) then return nil, "Push remote " .. remote .. " is missing; configure its URL." end
 	local endpoint; endpoint, err = push_endpoint(remote)
 	if not endpoint then return nil, err end
-	local specs = config_values("remote." .. remote .. ".push")
+	local specs; specs, err = config_values("remote." .. remote .. ".push")
+	if err then return nil, err end
 	local ref = opts.ref
 	if not ref and #specs > 0 then
 		if #specs ~= 1 then return nil, "Ambiguous remote push refspecs; configure one current-branch mapping." end
@@ -452,6 +464,15 @@ local function map_ref(source, destination, ref)
 	return dp .. ref:sub(#prefix + 1, #ref - #suffix) .. ds
 end
 
+local function parse_fetch_mapping(spec)
+	return spec:gsub("^+", ""):match("^([^:]+):([^:]+)$")
+end
+
+local function fetch_source(spec, tracking)
+	local source, destination = parse_fetch_mapping(spec)
+	return source and map_ref(destination, source, tracking)
+end
+
 local function excluded(specs, ref)
 	for _, spec in ipairs(specs) do
 		if spec:sub(1, 1) == "^" and map_ref(spec:sub(2), "*", ref) then return true end
@@ -460,11 +481,12 @@ local function excluded(specs, ref)
 end
 
 local function tracking_ref(target)
-	local specs = config_values("remote." .. target.remote .. ".fetch")
+	local specs, err = config_values("remote." .. target.remote .. ".fetch")
+	if err then return nil, err end
 	if excluded(specs, target.ref) then return nil, "Selected target is excluded from fetch tracking" end
 	local matches = {}
 	for _, spec in ipairs(specs) do
-		local source, destination = spec:gsub("^+", ""):match("^([^:]+):([^:]+)$")
+		local source, destination = parse_fetch_mapping(spec)
 		local ref = source and map_ref(source, destination, target.ref)
 		if ref then matches[ref] = true end
 	end
@@ -473,10 +495,10 @@ local function tracking_ref(target)
 	local ok, remotes = system({ "remote" }, { silent = true })
 	if not ok then return nil, "Cannot inspect tracking ref ownership" end
 	for _, remote in ipairs(remotes) do
-		local mappings = config_values("remote." .. remote .. ".fetch")
+		local mappings; mappings, err = config_values("remote." .. remote .. ".fetch")
+		if err then return nil, err end
 		for _, spec in ipairs(mappings) do
-			local source, destination = spec:gsub("^+", ""):match("^([^:]+):([^:]+)$")
-			local remote_ref = source and map_ref(destination, source, refs[1])
+			local remote_ref = fetch_source(spec, refs[1])
 			if remote_ref and not excluded(mappings, remote_ref) and (remote ~= target.remote or remote_ref ~= target.ref) then
 				return nil, "Tracking ref has ambiguous remote ownership"
 			end
@@ -488,9 +510,11 @@ end
 local function fetch_context(remote)
 	local ok, urls = system({ "remote", "get-url", "--all", remote }, { silent = true })
 	local common_ok, common = system({ "rev-parse", "--git-common-dir" }, { silent = true })
-	if not ok or #urls ~= 1 or not common_ok then return nil end
+	if not ok or #urls ~= 1 or not common_ok or not common[1] then return nil end
+	local specs, err = config_values("remote." .. remote .. ".fetch")
+	if err then return nil end
 	local directory = common[1]:sub(1, 1) == "/" and common[1] or cwd .. "/" .. common[1]
-	return { key = (vim.uv or vim.loop).fs_realpath(directory) or directory, remote = remote, url = urls[1], specs = config_values("remote." .. remote .. ".fetch") }
+	return { key = (vim.uv or vim.loop).fs_realpath(directory) or directory, remote = remote, url = urls[1], specs = specs }
 end
 
 local function record_fetch(context, ok)
@@ -522,8 +546,7 @@ local function record_fetch(context, ok)
 	for _, line in ipairs(refs) do
 		local ref, oid = line:match("^(%S+)\t(%S+)$")
 		for _, spec in ipairs(context.specs) do
-			local source, destination = spec:gsub("^+", ""):match("^([^:]+):([^:]+)$")
-			local remote_ref = source and map_ref(destination, source, ref)
+			local remote_ref = fetch_source(spec, ref)
 			if remote_ref and fetched[remote_ref] == oid and not excluded(context.specs, remote_ref) then observation.refs[ref] = { oid = oid, source = remote_ref } end
 		end
 	end
@@ -550,6 +573,7 @@ function M.publication_snapshot(target, limit)
 		local oid, hash, message = line:match("^([^\1]+)\1([^\1]+)\1(.*)$")
 		if oid then table.insert(snapshot.commits, { oid = oid, hash = hash, message = message, publication = "unknown" }) end
 	end
+	if not snapshot.head then snapshot.reason = "Cannot inspect source HEAD; publication state is unknown"; return snapshot end
 	if not log_ok then snapshot.reason = "Cannot inspect local commit history"; return snapshot end
 	if not target then return snapshot end
 	if target.head and target.head ~= snapshot.head then snapshot.reason = "Selected source commit changed; select the target again"; return snapshot end
@@ -567,7 +591,7 @@ function M.publication_snapshot(target, limit)
 	snapshot.freshness = publication_freshness(target, ref, snapshot.tracking_oid)
 	ok, output = system({ "rev-parse", "--is-shallow-repository" }, { silent = true })
 	if not ok or output[1] ~= "false" then snapshot.reason = "Incomplete or unreadable ancestry; publication is unknown"; return snapshot end
-	ok, output = system({ "rev-list", snapshot.tracking_oid .. ".." .. (snapshot.head or "HEAD") }, { silent = true })
+	ok, output = system({ "rev-list", snapshot.tracking_oid .. ".." .. snapshot.head }, { silent = true })
 	if not ok then snapshot.reason = "Cannot inspect publication history"; return snapshot end
 	local local_only = {}
 	for _, hash in ipairs(output) do local_only[hash] = true end

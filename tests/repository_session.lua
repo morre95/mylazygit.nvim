@@ -161,6 +161,49 @@ test('publication HEAD classification is independent of display limit and reject
   command(a, { 'config', 'remote.origin.pushurl', b })
   equal(alice.publication_snapshot(current).state, 'unknown', 'Stale selected push endpoint is refused')
 end)
+test('publication cannot confirm history when HEAD inspection fails', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'local' }, a .. '/local.txt'); assert(alice.stage('local.txt')); assert(alice.commit('Local only'))
+  local original = vim.fn.systemlist
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'rev-parse' and cmd[5] == '--verify' and cmd[6] == 'HEAD' then error('HEAD inspection unavailable') end
+    return original(cmd)
+  end
+  local snapshot = alice.publication_snapshot()
+  vim.fn.systemlist = original
+  equal(snapshot.state, 'unknown', 'Missing pinned source is unknown')
+  equal(snapshot.commits[1].publication, 'unknown', 'Missing HEAD cannot render local commit as confirmed')
+  equal(snapshot.commits[2].publication, 'unknown', 'Missing HEAD cannot render previous commit as confirmed')
+  assert(snapshot.reason, 'Missing HEAD has a diagnostic')
+end)
+test('publication fails closed on ownership and target configuration query failures', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('other', remote))
+  command(a, { 'config', 'remote.other.fetch', '+refs/heads/*:refs/remotes/origin/*' })
+  equal(alice.publication_snapshot().state, 'unknown', 'Overlapping owner is normally unknown')
+  local original = vim.fn.systemlist
+  local function inspect_with_failure(key, invalid_key)
+    vim.fn.systemlist = function(cmd)
+      if type(cmd) == 'table' and cmd[4] == 'config' and cmd[6] == key then
+        if invalid_key then return original({ 'git', 'config', '--get', 'invalid' }) end
+        error('configuration inspection unavailable')
+      end
+      return original(cmd)
+    end
+    local snapshot = alice.publication_snapshot()
+    vim.fn.systemlist = original
+    equal(snapshot.state, 'unknown', 'Failed ' .. key .. ' cannot confirm publication')
+    equal(snapshot.commits[1].publication, 'unknown', 'Failed config query keeps commit neutral')
+    assert(snapshot.reason, 'Failed config query has a diagnostic')
+  end
+  inspect_with_failure('remote.other.fetch', false)
+  inspect_with_failure('remote.other.fetch', true)
+  command(a, { 'config', '--unset-all', 'remote.other.fetch' })
+  equal(alice.publication_snapshot().state, 'published', 'Genuinely absent mapping is distinguished from inspection failure')
+  inspect_with_failure('branch.main.pushRemote', false)
+  inspect_with_failure('remote.pushDefault', true)
+  inspect_with_failure('push.default', false)
+end)
 test('a running mutation rejects overlap across sessions but permits an independent linked worktree', function()
   local alice, alias = git.session(a), git.session(a .. '/.')
   local linked = root .. '/linked'
