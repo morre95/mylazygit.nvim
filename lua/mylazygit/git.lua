@@ -345,6 +345,10 @@ function M.resolve_push_target(opts)
 	if not ref and #specs > 0 then
 		if #specs ~= 1 then return nil, "Ambiguous remote push refspecs; configure one current-branch mapping." end
 		local source, destination = specs[1]:match("^([^:]+):([^:]+)$")
+		local source_shorthand = source or specs[1]
+		if source_shorthand == branch and select(1, system({ "show-ref", "--verify", "refs/tags/" .. branch }, { silent = true })) then
+			return nil, "Configured push source is ambiguous; use the full refs/heads/ source."
+		end
 		if not source and (specs[1] == "HEAD" or specs[1] == branch or specs[1] == "refs/heads/" .. branch) then
 			source, destination = "refs/heads/" .. branch, "refs/heads/" .. branch
 		end
@@ -362,9 +366,7 @@ function M.resolve_push_target(opts)
 			ref = dp .. local_ref:sub(#prefix + 1, #local_ref - #suffix) .. ds
 		elseif source == local_ref or source == branch or source == "HEAD" then ref = destination
 		else return nil, "Push refspec does not map the current branch; configure its destination." end
-		if source == branch and select(1, system({ "show-ref", "--verify", "refs/tags/" .. branch }, { silent = true })) then
-			return nil, "Configured push source is ambiguous; use the full refs/heads/ source."
-		end
+
 		ref, err = configured_branch_destination(ref, endpoint)
 		if not ref then return nil, err end
 	end
@@ -535,6 +537,11 @@ function M.create_pull_request_async(opts, callback)
 		table.insert(args, trim(opts.head))
 	end
 
+	if opts.repo and trim(opts.repo) ~= "" then
+		table.insert(args, "--repo")
+		table.insert(args, trim(opts.repo))
+	end
+
 	if opts.draft then
 		table.insert(args, "--draft")
 	end
@@ -617,6 +624,32 @@ function M.branch_upstream(branch)
 	local target = upstream_target(branch)
 	if not target then return nil end
 	return { remote = target.remote, branch = target.branch }
+end
+
+local function github_repository(url)
+	local path = url:match("^https://github%.com/(.+)$") or url:match("^git@github%.com:(.+)$")
+		or url:match("^ssh://git@github%.com/(.+)$")
+	if not path then return nil end
+	path = path:gsub("/$", ""):gsub("%.git$", "")
+	local owner, name = path:match("^([%w_.-]+)/([%w_.-]+)$")
+	if not owner then return nil end
+	return { owner = owner, name = name, repo = owner .. "/" .. name }
+end
+
+-- An explicit --head disables gh's Git-config fork discovery. Preserve both
+-- repository identities when deriving the head of an already resolved push.
+function M.resolve_pr_target(target, base_remote)
+	if M.current_branch() ~= target.local_branch then return nil, "Branch changed since PR target selection; retry." end
+	local ok, urls = system({ "remote", "get-url", "--all", base_remote }, { silent = true })
+	if not ok or #urls ~= 1 then return nil, "PR base remote requires one unambiguous repository URL." end
+	local base, head = github_repository(urls[1]), github_repository(target.endpoint)
+	if base and head then
+		return { repo = base.repo, head = base.repo:lower() == head.repo:lower() and target.branch
+			or (head.owner .. ":" .. target.branch) }
+	end
+	-- Retain same-repository operation, including local transport adapters.
+	if urls[1] == target.endpoint then return { head = target.branch } end
+	return nil, "Cannot determine base and published GitHub repository identities; configure unambiguous GitHub URLs or create the PR with gh --repo owner/repo --head user:branch."
 end
 
 function M.pr_head_branch(branch, remote)
@@ -1205,6 +1238,11 @@ function M.create_pull_request(opts)
 	if opts.head and trim(opts.head) ~= "" then
 		table.insert(args, "--head")
 		table.insert(args, trim(opts.head))
+	end
+
+	if opts.repo and trim(opts.repo) ~= "" then
+		table.insert(args, "--repo")
+		table.insert(args, trim(opts.repo))
 	end
 
 	if opts.draft then

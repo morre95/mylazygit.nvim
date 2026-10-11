@@ -898,7 +898,7 @@ local function create_pull_request()
 		return
 	end
 
-	local function prompt_pr_form(pr_head)
+	local function prompt_pr_form(pr_target)
 		local base_branch = (config.merge_workflow and config.merge_workflow.main_branch) or config.branch_fallback
 
 		helpers.centered_dual_input({
@@ -936,7 +936,8 @@ local function create_pull_request()
 						title = title,
 						body = body,
 						base = base ~= "" and base or nil,
-						head = pr_head,
+						head = pr_target.head,
+						repo = pr_target.repo,
 					}, cb)
 				end, string.format("Created PR from %s to %s", current_branch, base ~= "" and base or "default"))
 			end)
@@ -945,13 +946,19 @@ local function create_pull_request()
 
 	local target, err = git.resolve_push_target({ inspect_remote = true })
 	if not target then notify(err, vim.log.levels.WARN); return end
+	local upstream = git.branch_upstream(current_branch)
+	local base_remote = upstream and upstream.remote or config.remote
+	local pr_target; pr_target, err = git.resolve_pr_target(target, base_remote)
+	if not pr_target then notify(err, vim.log.levels.WARN); return end
 	if not target.requires_confirmation and target.remote_exists then
-		prompt_pr_form(target.branch)
+		prompt_pr_form(pr_target)
 		return
 	end
 	choose_push_target({}, function(selected)
+		local selected_pr_target, reason = git.resolve_pr_target(selected, base_remote)
+		if not selected_pr_target then notify(reason, vim.log.levels.WARN); return end
 		push_to_target(selected, function(ok)
-			if ok then prompt_pr_form(selected.branch) end
+			if ok then prompt_pr_form(selected_pr_target) end
 		end)
 	end)
 
@@ -1865,7 +1872,7 @@ keymap_mappings = {
 		lhs = "gpr",
 		rhs = create_pull_request,
 		desc = "Create pull request",
-		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nUses the resolved push destination branch as PR head. First publication reviews the full destination before publishing, preserving an existing pull upstream. Missing or ambiguous mappings stop; use [gPp] to choose a destination.",
+		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nUses the resolved push destination branch as PR head. Known GitHub forks use user:branch and an explicit base repository; unknown fork identities stop with guidance. Organization-owned fork heads are unsupported by gh. First publication reviews the full destination before publishing, preserving an existing pull upstream. Missing or ambiguous mappings stop; use [gPp] to choose a destination.",
 	},
 	{
 		lhs = "ghr",
