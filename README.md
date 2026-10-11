@@ -32,6 +32,7 @@ return {
         main_branch = branch,   -- base branch for the workflow helper
         rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
       },
+      protected_branches = {},  -- branches gPF never rewrites, besides main_branch
       log_limit = 5,            -- number of log messages shown in the panel
       max_commit_lines = 100,   -- number of commits shown in the panel
       max_branch_lines = 10,    -- number of branches shown in the panel
@@ -92,7 +93,7 @@ Key | Action
 `p` | Pull with rebase from the current branch upstream (full remote source ref)
 `P` | Publish to the resolved push target; review first publication before proceeding
 `gPp` | Choose an explicit push remote and destination branch, then confirm the full destination
-`gPF` | Explain why raw force push is unavailable pending a reviewed lease-based replacement
+`gPF` | Rewrite the push destination with a reviewed lease (`--force-with-lease=<ref>:<reviewed commit>`)
 `f` | Fetch configured remote
 `gpr` | Create GitHub pull request via `gh pr create`
 `ghr` | Create GitHub repo via `gh repo create --source . --push`
@@ -176,7 +177,7 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 
 - Opening MyLazyGit captures the current Git worktree. Status, previews, staging, commits, network operations, GitHub commands, AI prompts, and conflict resolution continue using that worktree after `:cd`, `:lcd`, or a file-tree directory change. Change directories before launching to choose a worktree. Calling `:MyLazyGit` while it is open focuses the existing session. Close it and reopen to choose another worktree.
 - Pending prompts and callbacks retain their original worktree even if another session opens; they cannot redraw the other session. Temporary checkout return points are remembered separately for each worktree until you return or exit Neovim.
-- Raw force push is disabled in both the UI and Git-module entry points because it can overwrite teammates' commits. A reviewed lease-based replacement is separate work; ordinary push remains available.
+- Raw force push is not offered. `gPF` publishes an intentional rewrite (after amend or rebase) to the resolved push destination: a review shows the full destination ref and the remote commit being replaced, and defaults to cancellation, which changes nothing. The push uses an explicit `--force-with-lease=<ref>:<reviewed commit>`; if a teammate advanced the branch since review, even when a fetch updated your tracking ref meanwhile, Git rejects it. A rejected rewrite is never renewed, retried with raw force or turned into an ordinary push; fetch and review again. `merge_workflow.main_branch` and every `protected_branches` entry (names or `refs/heads/` refs) are refused before review. A destination without remote history uses ordinary push instead.
 - Branch detection reads the full local ref with `git symbolic-ref --quiet HEAD`, so a same-named remote-tracking ref cannot alter the local branch name. Detached HEAD shows a clear warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed` and `MyLazyGitUnpushed` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
@@ -208,6 +209,8 @@ Resolved synchronization uses `repo.resolve_pull_target()` and `repo.resolve_pus
 
 Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates source commit, branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
 
+Intentional rewrites use `repo.resolve_rewrite_target(opts)`, which resolves the push destination (honoring `opts.remote`/`opts.ref` overrides), refuses protected branches (`opts.protected`, default `{ "main" }`) and missing remote history, and records the reviewed remote commit as `target.expected`. After review, set `target.confirmed = true` and execute `repo.push_rewrite_target(target)` or `repo.push_rewrite_target_async(target, callback)`. Execution revalidates source commit, branch, destination and protection, then leases exactly `target.ref:target.expected`; a stale lease fails without changing remote history.
+
 Branch deletion uses separate inputs: `repo.delete_local_branch(name, force)` acts only on local branches (`delete_branch` remains a compatible alias), while `repo.delete_remote_branch(remote, branch)` takes the configured remote and full branch name separately. `repo.remote_branch_destinations()` returns unambiguous `{ remote = ..., branch = ... }` entries for deletion pickers; `repo.remote_branches()` keeps its existing string interface.
 
 Session paths resolve to the worktree root, including linked worktrees and sessions opened from subdirectories. Opening outside a repository captures that directory so `i` can initialize it.
@@ -218,4 +221,4 @@ Run the isolated integration harness from the project root:
 ./tests/run.sh
 ```
 
-The harness requires Git, Neovim 0.10+ and a POSIX shell. It creates a temporary local bare remote and two clones per scenario, isolates Git configuration, and removes fixtures afterward. It verifies actual Git outcomes through session operations and UI actions, including held asynchronous publication barriers, overlap refusal, partial failures and recovery, delayed/stale prompts, session reopening, async fetch, checkout return, linked worktrees, disabled force push, and synchronous execution fallbacks. GitHub and AI transport are replaced with local test adapters; no account or network is required. The plugin retains its existing older-Neovim fallback; the harness exercises that path on the installed Neovim by disabling `vim.system` for those scenarios.
+The harness requires Git, Neovim 0.10+ and a POSIX shell. It creates a temporary local bare remote and two clones per scenario, isolates Git configuration, and removes fixtures afterward. It verifies actual Git outcomes through session operations and UI actions, including held asynchronous publication barriers, overlap refusal, partial failures and recovery, delayed/stale prompts, session reopening, async fetch, checkout return, linked worktrees, reviewed-lease rewrites (stale leases after a teammate push and fetch, cancellation and protected branches), and synchronous execution fallbacks. GitHub and AI transport are replaced with local test adapters; no account or network is required. The plugin retains its existing older-Neovim fallback; the harness exercises that path on the installed Neovim by disabling `vim.system` for those scenarios.

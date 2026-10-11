@@ -15,6 +15,8 @@ local config = {
 		main_branch = "main",
 		rebase_args = {},
 	},
+	-- Branches never rewritten by gPF, in addition to merge_workflow.main_branch.
+	protected_branches = {},
 	log_limit = 5,
 	max_commit_lines = 100,
 	max_branch_lines = 10,
@@ -852,13 +854,20 @@ local function git_push_override()
 	end)
 end
 
-local function git_push_force()
-	local ok, output = git.push_force(config.remote, git.current_branch() or config.branch_fallback)
-	if ok then
+local function git_push_rewrite()
+	if not repo_required() then return end
+	local protected = vim.list_extend({ config.merge_workflow.main_branch }, config.protected_branches)
+	local target, err = git.resolve_rewrite_target({ protected = protected })
+	if not target then notify(err, vim.log.levels.WARN); return end
+	local answer = confirm(string.format("Rewrite remote %s, branch %s?\nReviewed remote commit: %s\nLocal %s replaces it only while the remote still has that commit.",
+		target.remote, target.ref, target.expected, target.local_branch), "&Rewrite\n&Cancel", 2)
+	if answer ~= 1 then notify("Rewrite cancelled"); return end
+	target.confirmed = true
+	git.push_rewrite_target_async(target, function(ok, output)
+		if ok then notify("Rewrote " .. target_label(target))
+		else notify(table.concat(output, "\n") .. "\nRewrite rejected; the remote kept its history. Fetch and review again.", vim.log.levels.WARN) end
 		M.refresh()
-	else
-		notify(table.concat(output, "\n"), vim.log.levels.WARN)
-	end
+	end)
 end
 
 local function git_fetch()
@@ -1863,7 +1872,7 @@ keymap_mappings = {
 		lhs = "A",
 		rhs = amend_commit,
 		desc = "Amend commit",
-		explain = "Modify the most recent commit (git commit --amend).\nThe previous commit message is pre-filled so you can edit it or leave it as-is.\nCurrently staged changes will be folded into the amended commit.\n\nWarning: do not amend commits that have already been pushed unless you plan to force-push.",
+		explain = "Modify the most recent commit (git commit --amend).\nThe previous commit message is pre-filled so you can edit it or leave it as-is.\nCurrently staged changes will be folded into the amended commit.\n\nWarning: do not amend commits that have already been pushed unless you plan to rewrite them with [gPF].",
 	},
 
 	-- Remote operations
@@ -1885,9 +1894,9 @@ keymap_mappings = {
 	},
 	{
 		lhs = "gPF",
-		rhs = git_push_force,
-		desc = "Force push unavailable",
-		explain = "Raw force push is unavailable because it can overwrite teammates’ commits.\nA reviewed lease-based replacement will be added separately. Ordinary push remains available with [P].",
+		rhs = git_push_rewrite,
+		desc = "Rewrite with reviewed lease",
+		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the full destination ref and the remote commit it replaces; cancel is the default and changes nothing.\nGit pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmerge_workflow.main_branch and setup() protected_branches are never rewritten.",
 	},
 	{
 		lhs = "f",
