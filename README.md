@@ -149,8 +149,12 @@ Key | Action
 `a` | Accept ours for all conflicts
 `A` | Accept theirs for all conflicts
 `f` | Select a different conflicted file
-`s` | Save resolved file and stage it
+`s` | Save and stage after every conflict has a choice
 `q` / `<Esc>` | Quit resolver without saving
+
+Saving uses the repository captured when the resolver opened and stages only the selected literal file path. Every conflict must have a choice; unresolved markers cannot be saved or staged here. The resolver checks the original file bytes before saving and refuses changed files: quit and reopen with `X` to load any external edits. Unrelated content, LF/CRLF line endings, a UTF-8 BOM and the final newline are preserved. A failed write never stages the file. If saving succeeds but staging fails, the result stays open for another `s` after fixing the Git error; later external edits still require reopening.
+
+After staging, the UI refreshes and offers the remaining unmerged files. Commit/continue is offered only after a successful index inspection reports no unmerged entries; an inspection failure stops with a diagnostic. Saving alone leaves the interrupted operation available for an explicit completion choice.
 
 ### Pane navigation key bindings (main window)
 
@@ -210,7 +214,7 @@ local ok, output = repo.stage({ 'file.lua' })
 
 Mutations are serialized per physical worktree, including legacy calls, AI commits, conflict saves and GitHub commands. A second mutation is rejected with a diagnostic while one runs; linked worktrees can act independently. Pending prompts revalidate branch, HEAD, staged content and selected refs before acting. Interrupted merges/rebases/cherry-picks/reverts reject unrelated mutations while permitting staging, conflict resolution and recovery. The header shows running operations or recovery state; `X` resolves files and `gx` offers continue, abort or skip where Git supports it. Failed operations refresh the UI even when they leave conflicts or other partial changes. Commit/pull/push stops immediately after a failed pull.
 
-Every session mutation keeps its existing `ok, output` return values (or callback parameters) and adds a third outcome with `status` (`success`, `failed`, `rejected`, `cancelled`), `action`, `target`, `diagnostics`, current `state`, `recovery` actions and `changed`. `repo.repository_state()` exposes HEAD, branch, staged/worktree changes, refs, conflicts, interrupted operation (including its current commit/merge identity) and running mutation. `repo.cancel_mutation(action, target)` reports cancellation without changing Git state.
+Every session mutation keeps its existing `ok, output` return values (or callback parameters) and adds a third outcome with `status` (`success`, `failed`, `rejected`, `cancelled`), `action`, `target`, `diagnostics`, current `state`, `recovery` actions and `changed`. `repo.repository_state()` exposes HEAD, branch, staged/worktree changes, refs, conflicts, `conflicts_known` (whether unmerged inspection succeeded), interrupted operation (including its current commit/merge identity) and running mutation. `repo.cancel_mutation(action, target)` reports cancellation without changing Git state. `repo.resolve_conflict(file, content, opts)` accepts exact file bytes as a string (legacy line lists are also supported), compares `opts.contents` before overwriting, and reports `outcome.saved` separately from staging success.
 
 For dependent operations, use `repo.mutate(action, function() ... return ok, output end, opts)` or `repo.mutate_async(action, function(done) ... done(ok, output) end, callback, opts)`; nested session mutations share the reservation. Finish every asynchronous path with `done`, including cancellation (`done(false, diagnostics, "cancelled")`). Pass an earlier `repo.repository_state()` as `opts.expected` to reject stale intent and `opts.target` to describe the workflow. `repo.resolve_conflict(file, lines, opts)` reserves before writing and staging; `opts.contents` can guard against an edited conflict file. For custom prompts inside a reserved workflow, call providers through `repo.without_mutation(provider, ...)` and bind the intended callback with `repo.user_callback(callback)`; external UI actions then cannot borrow that reservation. `repo.recover(operation, action, callback, opts)` accepts `opts.expected` from the recovery prompt, rejects a replaced operation, and acts only on the actual interrupted operation and sets its editor environment locally.
 

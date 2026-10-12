@@ -1077,7 +1077,8 @@ local function resolve_conflicts()
 		return
 	end
 
-	local conflicted_files = conflict.get_conflicted_files(git)
+	local conflicted_files, inspection_error = conflict.get_conflicted_files(git)
+	if not conflicted_files then notify(inspection_error, vim.log.levels.WARN); return end
 
 	if vim.tbl_isempty(conflicted_files) then
 		notify("No files with conflicts found", vim.log.levels.INFO)
@@ -1983,7 +1984,7 @@ keymap_mappings = {
 		lhs = "X",
 		rhs = resolve_conflicts,
 		desc = "Resolve conflicts",
-		explain = "Open the conflict resolver for unmerged files with merge, diff3 or zdiff3 markers.\n\nLayout:\n  Left pane — Theirs (Git's incoming marker side)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Ours (Git's current marker side)\n\nTitles show the marker labels and the information panel names the operation. During merge, ours is local and theirs is incoming. During rebase, ours is the rebased base (upstream plus commits already replayed); theirs is the commit being replayed. The common ancestor in diff3/zdiff3 is excluded from either choice and remains visible in unresolved previews.\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept ours for current conflict\n  h   — Accept theirs for current conflict\n  a   — Accept ours for all conflicts\n  A   — Accept theirs for all conflicts\n  f   — Select another conflicted file\n  s   — Save the resolved file and stage it\n  q   — Quit without saving\n\nMalformed markers, binary conflicts and delete/modify conflicts remain unresolved with a diagnostic. Resolve these externally and stage explicitly.",
+		explain = "Open the conflict resolver for unmerged files with merge, diff3 or zdiff3 markers.\n\nLayout:\n  Left pane — Theirs (Git's incoming marker side)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Ours (Git's current marker side)\n\nTitles show the marker labels and the information panel names the operation. During merge, ours is local and theirs is incoming. During rebase, ours is the rebased base (upstream plus commits already replayed); theirs is the commit being replayed. The common ancestor in diff3/zdiff3 is excluded from either choice and remains visible in unresolved previews.\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept ours for current conflict\n  h   — Accept theirs for current conflict\n  a   — Accept ours for all conflicts\n  A   — Accept theirs for all conflicts\n  f   — Select another conflicted file\n  s   — Save and stage only after every conflict has a choice\n  q   — Quit without saving\n\nSaving preserves file bytes and checks for edits since loading. Changed files require quitting and reopening with X. Failed writes never stage; after a staging failure, fix the Git error and retry s. Remaining unmerged files are offered after saving. Commit/continue is offered only after the index has no unmerged entries and inspection succeeds.\n\nMalformed markers, binary conflicts and delete/modify conflicts remain unresolved with a diagnostic. Resolve these externally and stage explicitly.",
 	},
 
 	-- Remotes
