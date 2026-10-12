@@ -428,6 +428,10 @@ function M.refresh()
 	if lifecycle.running then table.insert(layout.info.details, "Running: " .. lifecycle.running)
 	elseif lifecycle.operation or #lifecycle.conflicts > 0 then table.insert(layout.info.details, "Recovery: " .. (lifecycle.operation or "conflicts") .. " · [X] resolve · [gx] continue/abort")
 	else table.insert(layout.info.details, "Repository: ready") end
+	if lifecycle.workflow then
+		table.insert(layout.info.details, "Workflow: " .. (lifecycle.workflow.status or "stopped") .. (lifecycle.workflow.failed and (" · " .. lifecycle.workflow.failed) or ""))
+		table.insert(layout.info.details, "Remaining: " .. (#lifecycle.workflow.remaining > 0 and table.concat(lifecycle.workflow.remaining, "; ") or "none"))
+	end
 	local pull_target, pull_error = git.resolve_pull_target()
 	local push_target, push_error = git.resolve_push_target()
 	table.insert(layout.info.details, "Pull: " .. (pull_target and (pull_target.remote .. " " .. pull_target.ref) or pull_error))
@@ -524,7 +528,10 @@ end
 
 local function run_async_and_refresh(async_fn, success_msg)
 	async_fn(function(ok, output, result)
-		if ok and success_msg then
+		if result and result.workflow then
+			local lines = helpers.recovery_lines(output, result)
+			notify(table.concat(lines, "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
+		elseif ok and success_msg then
 			notify(success_msg)
 		elseif not ok and output then
 			notify(table.concat(output, "\n"), vim.log.levels.WARN)
@@ -1315,7 +1322,7 @@ local function merge_workflow()
 				table.insert(lines, "Failed: " .. (progress.failed or result.status))
 				table.insert(lines, "Remaining: " .. (#progress.remaining > 0 and table.concat(progress.remaining, "; ") or "none"))
 				table.insert(lines, "Current branch: " .. (result.state.branch or "detached HEAD"))
-				table.insert(lines, result.state.operation and "Resolve conflicts with X, then recover with gx. Remaining workflow steps require a new explicit decision."
+				table.insert(lines, result.state.operation and "Resolve conflicts with X, then recover with gx. Continue resumes remaining workflow steps after revalidation; publication stays manual."
 					or "Inspect repository state and decide how to finish the remaining work.")
 			end
 			if progress.publication == "reviewed-rewrite" then
@@ -1362,12 +1369,20 @@ end
 
 local function recover_repository()
 	local current = git.repository_state()
-	if not current.operation then notify("No merge/rebase/cherry-pick/revert to recover", vim.log.levels.INFO); return end
+	if not vim.tbl_contains({ "merge", "rebase", "cherry-pick", "revert" }, current.operation) then
+		notify(current.operation and "Inspect the sequencer externally to identify its operation before recovery." or "No merge/rebase/cherry-pick/revert to recover", vim.log.levels.INFO); return
+	end
 	local actions = { "continue", "abort" }
 	if current.operation ~= "merge" then table.insert(actions, "skip") end
-	prompts.select(actions, { prompt = "Recover " .. current.operation }, function(choice)
-		if not choice then return end
-		run_async_and_refresh(function(cb) git.recover(current.operation, choice, cb) end, "Recovery completed")
+	table.insert(actions, "cancel")
+	local effect = "Continue asks Git to finish the active " .. current.operation .. "; abort returns to its start and preserves completed synchronization."
+	if current.operation ~= "merge" then effect = effect .. " Skip discards the current patch." end
+	if current.workflow and current.workflow.status == "paused" then
+		effect = effect .. " Continue/skip resumes remaining workflow steps only while prerequisites remain valid. Publication stays manual."
+	end
+	prompts.select(actions, { prompt = "Recover " .. current.operation .. ": " .. effect }, function(choice)
+		if not choice or choice == "cancel" then M.refresh(); return end
+		run_async_and_refresh(function(cb) git.recover(current.operation, choice, cb, { expected = current }) end, "Recovery completed")
 	end)
 end
 
@@ -1811,7 +1826,7 @@ local function stash_drop()
 end
 
 keymap_mappings = {
-	{ lhs = "gx", rhs = recover_repository, desc = "Recover interrupted operation", explain = "Continue or abort the actual interrupted merge, rebase, cherry-pick or revert. Resolve and stage conflicts with X first. Other mutations are rejected until recovery completes." },
+	{ lhs = "gx", rhs = recover_repository, desc = "Recover interrupted operation", explain = "Continue or abort the actual interrupted merge, rebase, cherry-pick or revert. Resolve and stage conflicts with X first. Continue deliberately resumes a remembered integration workflow while prerequisites remain valid; abort preserves completed synchronization. Cancel leaves Git unchanged. Other mutations are rejected until recovery completes." },
 	{
 		lhs = "q",
 		rhs = ui.close,
@@ -2054,7 +2069,7 @@ keymap_mappings = {
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: private replay needs confirmation; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Publication is manual; remaining workflow steps never run automatically.",
+		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: private replay needs confirmation; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
 	},
 	{
 		lhs = "gbr",

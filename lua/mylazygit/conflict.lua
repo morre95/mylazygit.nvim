@@ -1,4 +1,5 @@
 local git_module = require("mylazygit.git")
+local helpers = require("mylazygit.helpers")
 local resolver = {}
 local active_resolver
 
@@ -346,7 +347,10 @@ local function is_selected(choice, label)
 end
 
 local function continue_operation(operation, expected, on_success, on_failure)
-  git.recover(operation, "continue", function(ok, output)
+  git.recover(operation, "continue", function(ok, output, result)
+    if result.workflow then
+      vim.notify(table.concat(helpers.recovery_lines(output, result), "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
+    end
     if ok then if on_success then on_success() end
     elseif on_failure then on_failure(output) end
   end, { expected = expected })
@@ -362,9 +366,11 @@ local function prompt_post_resolve(in_rebase, in_merge)
     vim.notify(string.format("%d unmerged file(s) remain; resume resolution with [X]", #expected.conflicts), vim.log.levels.WARN)
     return
   end
+  local workflow_effect = expected.workflow and expected.workflow.status == "paused"
+    and " Remaining workflow steps resume only while prerequisites remain valid; publication stays manual." or ""
   if in_rebase then
     select({ "Continue", "Stop here" }, {
-      prompt = "File resolved and staged. Continue rebase?",
+      prompt = "File resolved and staged. Continue rebase?" .. workflow_effect,
     }, function(choice)
       if not is_selected(choice, "Continue") then
         return
@@ -378,7 +384,7 @@ local function prompt_post_resolve(in_rebase, in_merge)
     end)
   elseif in_merge then
     select({ "Commit", "Stop here" }, {
-      prompt = "File resolved and staged. Commit the merge?",
+      prompt = "File resolved and staged. Commit the merge?" .. workflow_effect,
     }, function(choice)
       if not is_selected(choice, "Commit") then
         return
