@@ -86,8 +86,8 @@ Key | Action
 `gsp` | Pull with rebase (same behavior as `p`)
 `c` | Commit staged changes
 `aic` | Generate AI commit message from staged diff and commit (OpenRouter)
-`A` | Amend latest commit (`git commit --amend`)
-`gss` | Squash a range of recent commits into one
+`A` | Review and amend latest commit (includes staged changes)
+`gss` | Review and squash a range of recent commits into one
 `gct` | Temporarily detach and checkout selected commit
 `gcr` | Return to branch/commit from temporary checkout
 `p` | Pull with rebase from the current branch upstream (full remote source ref)
@@ -111,7 +111,7 @@ Key | Action
 `gbx` | Confirm the exact remote and full branch, then delete it (`git push <remote> --delete refs/heads/<branch>`)
 `gbm` | Merge selected local branch into current branch
 `gbw` | Run merge workflow helper (sync/rebase/merge flow)
-`gbr` | Rebase current branch onto selected branch
+`gbr` | Review and rebase current branch onto selected branch
 `gzz` | Stash push
 `gzp` | Stash pop
 `gzd` | Stash drop
@@ -182,6 +182,8 @@ The floating buffer is read-only and safe to keep open while editing. MyLazyGit 
 - Opening MyLazyGit captures the current Git worktree. Status, previews, staging, commits, network operations, GitHub commands, AI prompts, and conflict resolution continue using that worktree after `:cd`, `:lcd`, or a file-tree directory change. Change directories before launching to choose a worktree. Calling `:MyLazyGit` while it is open focuses the existing session. Close it and reopen to choose another worktree.
 - Pending prompts and callbacks retain their original worktree even if another session opens; they cannot redraw the other session. Temporary checkout return points are remembered separately for each worktree until you return or exit Neovim.
 - Raw force push is not offered. `gPF` publishes an intentional rewrite (after amend or rebase) to the resolved push destination: a review shows the push endpoint, the full destination ref, the remote commit being replaced and the local commit replacing it, and defaults to cancellation, which changes nothing. The push uses an explicit `--force-with-lease=<ref>:<reviewed commit>`; if a teammate advanced the branch since review, even when a fetch updated your tracking ref meanwhile, Git rejects it. A rejected rewrite is never renewed, retried with raw force or turned into an ordinary push; fetch and review again. `main`, `merge_workflow.main_branch` and every `protected_branches` entry (names or `refs/heads/` refs) are refused before review. A destination without remote history uses ordinary push instead.
+- History cleanup (`A`, `gss`, `gbr`) classifies the commits it will replace using the same publication evidence as the commit display. Private commits require an explicit operation choice; any affected published commit requires an explicit **Rewrite** choice showing the destination, endpoint and reviewed remote commit. Unknown evidence stops cleanup, and published cleanup of `main`, `merge_workflow.main_branch` or `protected_branches` is refused. All choices default to cancellation, which preserves refs and staged work. Amend and squash include existing staged changes. Squash excludes the root commit and restores the original branch tip and index if the commit fails. Rebase changes only the reviewed current branch, even with `rebase.updateRefs` enabled; conflicts use `X` and `gx` for recovery.
+- Private cleanup normally publishes with `P`. Published cleanup retains its original reviewed remote expectation in the Neovim session; later `gPF` uses that lease through UI reopen, further cleanup, conflict recovery and fetches. A teammate push rejects publication without overwriting their history. A failed lease stays rejected and is never automatically renewed.
 - Branch detection reads the full local ref with `git symbolic-ref --quiet HEAD`, so a same-named remote-tracking ref cannot alter the local branch name. Detached HEAD shows a clear warning (including the short HEAD hash) plus a reminder in the info area.
 - Log colors can be customized by redefining the `MyLazyGitPushed`, `MyLazyGitUnpushed` and `MyLazyGitUnknown` highlight groups.
 - Pull request creation uses the [GitHub CLI](https://cli.github.com/) (`gh`). Install it and run `gh auth login` before using the `gpr` keymap.
@@ -216,6 +218,8 @@ Resolved synchronization uses `repo.resolve_pull_target()` and `repo.resolve_pus
 Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates source commit, branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
 
 Intentional rewrites use `repo.resolve_rewrite_target(opts)`, which resolves the push destination, refuses `main`, any additional protected branches in `opts.protected`, and missing remote history, and records the reviewed remote commit as `target.expected`. After review, set `target.confirmed = true` and execute `repo.push_rewrite_target(target)` or `repo.push_rewrite_target_async(target, callback)`. Execution revalidates source commit, branch, destination and protection, then leases exactly `target.ref:target.expected`; a stale lease fails without changing remote history.
+
+History cleanup uses `repo.resolve_cleanup_target(operation, opts)` with `operation` equal to `amend`, `squash` (`opts.count`) or `rebase` (`opts.onto`, a local branch), and optional additional `opts.protected` branches. The returned target captures repository intent, affected-history classification and any reviewed publication lease. Set `target.confirmed = true` for the explicit operation choice; published history also requires `target.rewrite_confirmed = true`. Execute with `repo.cleanup_target(target, message)` and inspect its mutation outcome for recovery state. The compatible `commit_amend(message, target)` and `rebase(branch, target)` entrypoints require that review target. `repo.resolve_cleanup_publication(opts)` returns the retained pre-cleanup lease with the current source HEAD for a later confirmed rewrite; successful rewrite publication clears it. Reviews live for the current Neovim process and are scoped to the physical worktree and local branch.
 
 Branch deletion uses separate inputs: `repo.delete_local_branch(name, force)` acts only on local branches (`delete_branch` remains a compatible alias), while `repo.delete_remote_branch(remote, branch)` takes the configured remote and full branch name separately. `repo.remote_branch_destinations()` returns unambiguous `{ remote = ..., branch = ... }` entries for deletion pickers; `repo.remote_branches()` keeps its existing string interface.
 

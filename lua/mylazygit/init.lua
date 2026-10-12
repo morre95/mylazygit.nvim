@@ -15,7 +15,7 @@ local config = {
 		main_branch = "main",
 		rebase_args = {},
 	},
-	-- Branches never rewritten by gPF, in addition to main and merge_workflow.main_branch.
+	-- Published cleanup and gPF protect these branches, main and merge_workflow.main_branch.
 	protected_branches = {},
 	log_limit = 5,
 	max_commit_lines = 100,
@@ -676,6 +676,38 @@ local function build_squash_message(entries, count)
 	return table.concat(parts, " | ")
 end
 
+local function cleanup_protected()
+	return vim.list_extend({ config.merge_workflow.main_branch }, vim.deepcopy(config.protected_branches))
+end
+
+local function review_cleanup(operation, opts)
+	opts = opts or {}
+	opts.protected = cleanup_protected()
+	local target, err = git.resolve_cleanup_target(operation, opts)
+	if not target then notify(err, vim.log.levels.WARN); return end
+	local published = target.publication == "published"
+	local review = published and string.format(
+		"Rewrite published history with %s on %s?\nPublication: %s %s (%s)\nReviewed remote commit: %s\nLater gPF will lease this commit; ordinary push cannot publish the rewrite.",
+		operation, target.local_branch, target.rewrite.remote, target.rewrite.ref, target.rewrite.endpoint, target.rewrite.expected)
+		or string.format("%s unpublished history on %s?\n%s", operation, target.local_branch,
+			target.rewrite and "Publish with gPF using the earlier cleanup's retained reviewed lease." or "Publish the result with ordinary push (P).")
+	if operation == "amend" or operation == "squash" then review = review .. "\nExisting staged changes will be included." end
+	if confirm(review, (published and "&Rewrite" or "&" .. operation) .. "\n&Cancel", 2) ~= 1 then notify("Cleanup cancelled"); return end
+	target.confirmed, target.rewrite_confirmed = true, published
+	return target
+end
+
+local function execute_cleanup(target, message)
+	local ok, output, outcome = git.cleanup_target(target, message)
+	if ok then
+		notify(target.operation .. " completed. " .. (target.rewrite and "Publish with gPF using the pre-cleanup reviewed lease." or "Publish with ordinary push (P)."))
+	else
+		local recovery = outcome and outcome.state.operation
+		notify(table.concat(output or {}, "\n") .. (recovery and "\nResolve conflicts with X, then recover with gx. The reviewed publication lease is retained." or "\nInspect repository state and retry cleanup."), vim.log.levels.WARN)
+	end
+	M.refresh()
+end
+
 local function squash_commits()
 	if not repo_required() then
 		return
@@ -703,6 +735,8 @@ local function squash_commits()
 		end
 
 		local count = choice.index
+		local target = review_cleanup("squash", { count = count })
+		if not target then return end
 		local default_message = build_squash_message(entries, count)
 
 		prompts.input({ prompt = "Commit message", default = default_message }, function(msg)
@@ -711,15 +745,7 @@ local function squash_commits()
 				return
 			end
 
-			run_and_refresh(function()
-				return git.mutate("squash", function()
-				local reset_ok = select(1, git.reset_soft(count))
-				if not reset_ok then
-					return false
-				end
-				return git.commit(msg)
-				end)
-			end, string.format("Squashed %d commit(s)", count))
+			execute_cleanup(target, msg)
 		end)
 	end)
 end
@@ -856,8 +882,9 @@ end
 
 local function git_push_rewrite()
 	if not repo_required() then return end
-	local protected = vim.list_extend({ config.merge_workflow.main_branch }, config.protected_branches)
-	local target, err = git.resolve_rewrite_target({ protected = protected })
+	local protected = cleanup_protected()
+	local target, err = git.resolve_cleanup_publication({ protected = protected })
+	if not target and not err then target, err = git.resolve_rewrite_target({ protected = protected }) end
 	if not target then notify(err, vim.log.levels.WARN); return end
 	local review = string.format(
 		"Rewrite remote %s (%s), branch %s?\nReviewed remote commit: %s\nLocal %s commit %s replaces it only while the remote still has that commit.",
@@ -1308,9 +1335,8 @@ local function rebase_branch()
 		if not choice then
 			return
 		end
-		run_and_refresh(function()
-			return select(1, git.rebase(choice))
-		end, string.format("Rebased onto %s", choice))
+		local target = review_cleanup("rebase", { onto = choice })
+		if target then execute_cleanup(target) end
 	end)
 end
 
@@ -1598,6 +1624,8 @@ local function amend_commit()
 		return
 	end
 
+	local target = review_cleanup("amend")
+	if not target then return end
 	local entries = git.log(1)
 	local default_msg = (entries[1] and entries[1].message) or ""
 
@@ -1605,9 +1633,7 @@ local function amend_commit()
 		if not msg then
 			return
 		end
-		run_and_refresh(function()
-			return select(1, git.commit_amend(msg))
-		end, "Commit amended")
+		execute_cleanup(target, msg)
 	end)
 end
 
@@ -1864,7 +1890,7 @@ keymap_mappings = {
 		lhs = "gss",
 		rhs = squash_commits,
 		desc = "Squash commits",
-		explain = "Combine multiple recent commits into one:\n1. Select the oldest commit you want to include\n2. Edit the combined commit message\n3. A soft reset is performed and a new single commit is created\n\nUseful for cleaning up work-in-progress commits before pushing.",
+		explain = "Combine recent commits into one, including existing staged changes. Select the oldest included commit (the root cannot be included), explicitly choose private cleanup or Rewrite for published history, then edit the message.\nUnknown publication evidence and protected published branches are refused. Cancellation preserves refs and index; a failed commit restores the original branch tip and staged work. Publish private work with P; published cleanup uses gPF with the pre-cleanup reviewed lease.",
 	},
 	{
 		lhs = "gct",
@@ -1882,7 +1908,7 @@ keymap_mappings = {
 		lhs = "A",
 		rhs = amend_commit,
 		desc = "Amend commit",
-		explain = "Modify the most recent commit (git commit --amend).\nThe previous commit message is pre-filled so you can edit it or leave it as-is.\nCurrently staged changes will be folded into the amended commit.\n\nWarning: do not amend commits that have already been pushed unless you plan to rewrite them with [gPF].",
+		explain = "Modify the latest commit and include existing staged changes. Explicitly choose private amend or Rewrite for published history before editing the pre-filled message.\nUnknown publication evidence and protected published branches are refused. Cancellation changes no refs or index. Publish private work with P; published cleanup retains its reviewed remote expectation for gPF, even after a fetch.",
 	},
 
 	-- Remote operations
@@ -1906,7 +1932,7 @@ keymap_mappings = {
 		lhs = "gPF",
 		rhs = git_push_rewrite,
 		desc = "Rewrite with reviewed lease",
-		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the push endpoint, the full destination ref, the remote commit it replaces and the local commit replacing it; cancel is the default and changes nothing.\nGit pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmain, merge_workflow.main_branch and setup() protected_branches are never rewritten.",
+		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the push endpoint, the full destination ref, the remote commit it replaces and the local commit replacing it; cancel is the default and changes nothing.\nAfter published cleanup, this review retains the remote commit reviewed before cleanup. Git pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmain, merge_workflow.main_branch and setup() protected_branches are never rewritten.",
 	},
 	{
 		lhs = "f",
@@ -2014,7 +2040,7 @@ keymap_mappings = {
 		lhs = "gbr",
 		rhs = rebase_branch,
 		desc = "Rebase branch",
-		explain = "Rebase the current branch onto another branch (git rebase <target>).\nOpens a picker to choose the target branch.\nRebasing replays your commits on top of the target, resulting in a linear history.\n\nIf conflicts arise during the rebase, resolve them with [X] and then run `git rebase --continue` from the terminal.",
+		explain = "Choose a local branch and explicitly confirm replaying private commits or Rewrite when the replayed history includes published commits. Unknown evidence and protected published branches are refused; cancellation changes no refs or index.\nRebase changes only the reviewed current branch, regardless of rebase.updateRefs. Existing staged changes can prevent Git from rebasing and remain intact. Resolve conflicts with X, then continue, abort or skip with gx. Publish private replay with P; published replay retains the pre-rebase reviewed lease for gPF through conflict recovery and fetches.",
 	},
 
 	-- Toggle staging
