@@ -1745,7 +1745,7 @@ test('cleanup UI cancels amend squash and rebase without changing refs or staged
   vim.fn.confirm, vim.ui.select, vim.ui.input, vim.fn.prompt_setcallback = old_confirm, old_select, old_input, old_prompt
   ui.close()
 end)
-test('cleanup squash commit failure restores original refs and preserves staged work', function()
+test('cleanup squash hook failure restores original index and preserves formatter output', function()
   local alice = git.session(a)
   assert(alice.switch_create('topic')); command(a, { 'push', '-u', 'origin', 'topic' })
   for _, name in ipairs({ 'one', 'two' }) do
@@ -1753,12 +1753,13 @@ test('cleanup squash commit failure restores original refs and preserves staged 
   end
   vim.fn.writefile({ 'staged' }, a .. '/staged'); assert(alice.stage('staged'))
   local before, tree = alice.repository_state().head, command(a, { 'write-tree' })
-  vim.fn.writefile({ '#!/bin/sh', 'exit 1' }, a .. '/.git/hooks/pre-commit'); vim.fn.setfperm(a .. '/.git/hooks/pre-commit', 'rwxr-xr-x')
+  vim.fn.writefile({ '#!/bin/sh', 'printf \"formatted\\n\" > staged', 'git add staged', 'exit 1' }, a .. '/.git/hooks/pre-commit'); vim.fn.setfperm(a .. '/.git/hooks/pre-commit', 'rwxr-xr-x')
   local target = assert(alice.resolve_cleanup_target('squash', { count = 2 })); target.confirmed = true
   equal(target.publication, 'local-only', 'Only selected private commits participate')
   equal(alice.cleanup_target(target, 'Combined'), false, 'Real commit hook rejects squash')
   equal(alice.repository_state().head, before, 'Failed squash restores original branch tip')
   equal(command(a, { 'write-tree' }), tree, 'Failed squash preserves original staged content')
+  equal(vim.fn.readfile(a .. '/staged'), { 'formatted' }, 'Failed squash retains hook working-tree output')
   vim.fn.delete(a .. '/.git/hooks/pre-commit')
   target = assert(alice.resolve_cleanup_target('squash', { count = 2 })); target.confirmed = true
   assert(alice.cleanup_target(target, 'Combined'))
@@ -1882,6 +1883,24 @@ test('cleanup legacy reviewed entrypoints refuse stale staged intent', function(
   equal(alice.commit_amend('Stale amend', target), false, 'Legacy reviewed amend revalidates captured index')
   equal(alice.repository_state().head, before, 'Stale reviewed entrypoint preserves HEAD')
   equal(alice.diff({ '--cached', '--name-only' }), { 'later' }, 'Stale reviewed entrypoint preserves newer staged work')
+end)
+test('cleanup rebase confines updateRefs configuration to the reviewed current branch', function()
+  local alice = git.session(a)
+  command(a, { 'branch', 'base' }); assert(alice.switch_create('topic'))
+  vim.fn.writefile({ 'shared' }, a .. '/shared'); assert(alice.stage('shared')); assert(alice.commit('Shared published history'))
+  command(a, { 'branch', '-f', 'main' }); command(a, { 'branch', 'sibling' }); command(a, { 'push', 'origin', 'main' })
+  vim.fn.writefile({ 'topic' }, a .. '/topic'); assert(alice.stage('topic')); assert(alice.commit('Published topic'))
+  command(a, { 'push', '-u', 'origin', 'topic' })
+  local protected_before, sibling_before, topic_before = command(a, { 'rev-parse', 'main' }), command(a, { 'rev-parse', 'sibling' }), alice.repository_state().head
+  assert(alice.switch('base'))
+  vim.fn.writefile({ 'new base' }, a .. '/base'); assert(alice.stage('base')); assert(alice.commit('New base'))
+  assert(alice.switch('topic')); command(a, { 'config', 'rebase.updateRefs', 'true' })
+  local target = assert(alice.resolve_cleanup_target('rebase', { onto = 'base' })); target.confirmed, target.rewrite_confirmed = true, true
+  assert(alice.cleanup_target(target))
+  assert(alice.repository_state().head ~= topic_before, 'Reviewed current branch was rebased')
+  equal(command(a, { 'rev-parse', 'main' }), protected_before, 'Protected published main remains unchanged')
+  equal(command(a, { 'rev-parse', 'sibling' }), sibling_before, 'Other unreviewed branches remain unchanged')
+  equal(command(remote, { 'rev-parse', 'main' }), protected_before, 'Published main remains unchanged')
 end)
 local ok, err = xpcall(function()
   for _, entry in ipairs(tests) do

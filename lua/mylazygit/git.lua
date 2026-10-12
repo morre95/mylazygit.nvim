@@ -760,15 +760,25 @@ function M.cleanup_target(target, message)
 		if target.operation == "amend" then
 			ok, output = system(message and vim.trim(message) ~= "" and { "commit", "--amend", "-m", message } or { "commit", "--amend", "--no-edit" })
 		elseif target.operation == "squash" then
+			local uv = vim.uv or vim.loop
+			local path_ok, paths = system({ "rev-parse", "--git-path", "index" }, { silent = true })
+			if not path_ok or not paths[1] then return false, { "Cannot locate index for squash recovery" } end
+			local index = paths[1]:sub(1, 1) == "/" and paths[1] or cwd .. "/" .. paths[1]
+			local backup = index .. ".mylazygit-cleanup-" .. vim.fn.tempname():gsub("[^%w]", "_")
+			-- Hooks may stage formatter output before failing; preserve the complete original index.
+			local copied, copy_error = uv.fs_copyfile(index, backup)
+			if not copied then return false, { "Cannot back up index before squash: " .. tostring(copy_error) } end
 			ok, output = system({ "reset", "--soft", target.base })
 			if ok then
 				ok, output = system({ "commit", "-m", message or "Squashed commits" })
 				if not ok then
 					local restored, diagnostics = system({ "update-ref", "refs/heads/" .. target.local_branch, target.head, target.base })
 					if not restored then vim.list_extend(output, diagnostics) end
-				end
-			end
-		else ok, output = system({ "rebase", "--", target.onto }) end
+					local index_restored, restore_error = uv.fs_rename(backup, index)
+					if not index_restored then table.insert(output, "Cannot restore index: " .. tostring(restore_error) .. "; original index saved at " .. backup) end
+				else uv.fs_unlink(backup) end
+			else uv.fs_unlink(backup) end
+		else ok, output = system({ "rebase", "--no-update-refs", "--", target.onto }) end
 		if target.rewrite and (head_oid() ~= target.head or M.repository_state().operation) then
 			cleanup_reviews[cleanup_key] = cleanup_reviews[cleanup_key] or {}
 			cleanup_reviews[cleanup_key][target.local_branch] = vim.deepcopy(target.rewrite)

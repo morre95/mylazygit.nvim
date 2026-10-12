@@ -2040,7 +2040,7 @@ keymap_mappings = {
 		lhs = "gbr",
 		rhs = rebase_branch,
 		desc = "Rebase branch",
-		explain = "Choose a local branch and explicitly confirm replaying private commits or Rewrite when the replayed history includes published commits. Unknown evidence and protected published branches are refused; cancellation changes no refs or index.\nExisting staged changes can prevent Git from rebasing and remain intact. Resolve conflicts with X, then continue, abort or skip with gx. Publish private replay with P; published replay retains the pre-rebase reviewed lease for gPF through conflict recovery and fetches.",
+		explain = "Choose a local branch and explicitly confirm replaying private commits or Rewrite when the replayed history includes published commits. Unknown evidence and protected published branches are refused; cancellation changes no refs or index.\nRebase changes only the reviewed current branch, regardless of rebase.updateRefs. Existing staged changes can prevent Git from rebasing and remain intact. Resolve conflicts with X, then continue, abort or skip with gx. Publish private replay with P; published replay retains the pre-rebase reviewed lease for gPF through conflict recovery and fetches.",
 	},
 
 	-- Toggle staging
