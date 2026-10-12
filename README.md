@@ -111,9 +111,9 @@ Key | Action
 `gbs` | Switch to an existing local branch
 `gbN` | Rename a local branch (`git branch -m`)
 `gbR` | Fetch and switch to a remote branch (create tracking branch)
-`gbd` | Delete local branch safely (`git branch -d`)
-`gbD` | Force delete local branch (`git branch -D`)
-`gbx` | Confirm the exact remote and full branch, then delete it (`git push <remote> --delete refs/heads/<branch>`)
+`gbd` | Select and safely delete local branches (`git branch -d`)
+`gbD` | Select and force-delete local branches (`git branch -D`)
+`gbx` | Select remote branches, confirm exact destinations, then delete them
 `gbm` | Merge selected local branch into current branch
 `gbw` | Integrate feature with history-preserving merges, or choose reviewed rebase
 `gbr` | Review and rebase current branch onto selected branch
@@ -127,9 +127,11 @@ Push selects `branch.<local>.pushRemote`, then `remote.pushDefault`, then the br
 
 First publication and `gPp` overrides show the full remote and destination ref and default to cancellation. With no push mapping, use `gPp` to deliberately choose a remote and branch. Publication sets a pull upstream only when one is absent; publishing to a fork preserves an existing upstream. Ordinary push publishes one branch without force or automatic follow-tags; multiple push endpoints and mirror configuration are refused. Divergent remote history is rejected by Git. The `gsC` chain stops after a failed pull.
 
+Branch deletion supports multiple selections: choose each branch from the picker, then press **Esc** to finish (selecting every candidate also finishes). One confirmation lists all selected branches or remote destinations and defaults to **No**. Esc before selecting anything cancels. The result reports each successful or failed deletion; a refusal does not prevent attempts on the other selected branches.
+
 Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves the remote `team` branch `task` untouched. Safe deletion refuses unmerged branches; force deletion has a separate confirmation. Both respect branches checked out in any worktree.
 
-Remote deletion requires `gbx`. Its picker and confirmation identify the configured remote and full branch name separately, including names containing slashes. Cancelling the picker or confirmation changes no refs. Local branches and same-named remote tags remain intact. Tracking refs matching more than one configured remote prefix are omitted, so overlapping remote names cannot select a guessed destination.
+Remote deletion requires `gbx`. Its picker and confirmation identify the configured remote and full branch name separately, including names containing slashes. Cancelling before making a selection or declining confirmation changes no refs. Local branches and same-named remote tags remain intact. Tracking refs matching more than one configured remote prefix are omitted, so overlapping remote names cannot select a guessed destination.
 
 Commit publication labels and colors describe the selected **push destination's cached remote-tracking history**. `[published]` (green) means the commit is reachable from that tracking history; `[local-only]` (red) means it is absent from that history; `[unknown]` (gray) means evidence is unavailable. Different pull/push remotes and differently named branches use the resolved destination rather than the local branch name. Missing upstreams, tracking refs or mappings, excluded/ambiguous mappings, split fetch/push endpoints, shallow ancestry and failed inspection remain unknown. These labels never confirm the live remote's current state.
 

@@ -1068,14 +1068,14 @@ test('dedicated remote deletion confirms the exact destination and cancellation 
   local original_select, original_confirm = vim.ui.select, vim.fn.confirm
   local cancel_picker, confirmation, confirmations = true, 2, 0
   vim.ui.select = function(items, opts, submit)
-    equal(opts.prompt, 'Delete remote branch', 'Dedicated action picker')
+    equal(opts.prompt, 'Delete remote branch (Esc to finish)', 'Dedicated action picker')
     local target
     for _, destination in ipairs(items) do
       if type(destination) == 'table' and destination.remote == 'team/upstream' and destination.branch == 'feature/deep/task' then
         target = destination
       end
     end
-    assert(target, 'Picker carries the separate remote and full branch')
+    if not target then submit(nil); return end
     equal(opts.format_item(target), 'remote: team/upstream | branch: feature/deep/task', 'Picker disambiguates destination')
     if cancel_picker then submit(nil) else submit(target) end
   end
@@ -1114,7 +1114,7 @@ test('local UI deletion keeps safety checks and identifies force deletion separa
   local original_select, original_confirm = vim.ui.select, vim.fn.confirm
   local force, confirmation = false, 2
   vim.ui.select = function(items, opts, submit)
-    equal(opts.prompt, force and 'Force delete local branch (-D)' or 'Delete local branch (-d)', 'Local deletion scope is explicit')
+    equal(opts.prompt, (force and 'Force delete local branch (-D)' or 'Delete local branch (-d)') .. ' (Esc to finish)', 'Local deletion scope is explicit')
     assert(not vim.tbl_contains(items, 'main'), 'Current branch is excluded from deletion picker')
     assert(vim.tbl_contains(items, 'team/task'), 'Slash-named local branch is selectable')
     submit('team/task')
@@ -1138,6 +1138,148 @@ test('local UI deletion keeps safety checks and identifies force deletion separa
   equal(alice.remote_branch_exists('team', 'task'), true, 'Local deletion never touches remote task')
   vim.ui.select, vim.fn.confirm = original_select, original_confirm
   ui.close()
+end)
+test('bulk local UI deletion confirms all choices and reports partial failure without forcing', function()
+  local alice = git.session(a)
+  command(a, { 'branch', 'merged-one' }); command(a, { 'branch', 'merged-two' })
+  assert(alice.switch_create('unmerged'))
+  vim.fn.writefile({ 'unique' }, a .. '/unique'); assert(alice.stage('unique')); assert(alice.commit('Unique'))
+  assert(alice.switch('main'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local old_select, old_confirm = vim.ui.select, vim.fn.confirm
+  local choices, choice_index, confirmation, confirmations = { 'merged-one', 'unmerged', 'merged-two' }, 0, 2, 0
+  vim.ui.select = function(items, opts, cb)
+    assert(opts.prompt:find('Esc to finish', 1, true), 'Picker explains how to finish selecting')
+    assert(not vim.tbl_contains(items, 'main'), 'Current branch is never selectable')
+    choice_index = choice_index + 1
+    assert(vim.tbl_contains(items, choices[choice_index]), 'Only remaining branches are selectable')
+    for index = 1, choice_index - 1 do assert(not vim.tbl_contains(items, choices[index]), 'Selected branch is not offered again') end
+    cb(choices[choice_index])
+  end
+  vim.fn.confirm = function(message, _, default)
+    confirmations = confirmations + 1
+    equal(default, 2, 'Bulk confirmation defaults to cancellation')
+    for _, name in ipairs(choices) do assert(message:find(name, 1, true), 'Confirmation lists every selected branch') end
+    return confirmation
+  end
+  action('gbd')
+  for _, name in ipairs(choices) do assert(alice.has_local_branch(name), 'Cancelled batch preserves every branch') end
+  choice_index, confirmation = 0, 1
+  action('gbd')
+  equal(confirmations, 2, 'One confirmation per batch')
+  assert(not alice.has_local_branch('merged-one') and not alice.has_local_branch('merged-two'), 'Merged branches deleted despite one refusal')
+  assert(alice.has_local_branch('unmerged'), 'Safe bulk delete preserves unmerged history')
+  local message = notifications[#notifications]
+  assert(message:find('Deleted: merged-one', 1, true) and message:find('Deleted: merged-two', 1, true) and message:find('Failed: unmerged', 1, true), 'Summary distinguishes successful and failed branches')
+  vim.ui.select, vim.fn.confirm = old_select, old_confirm; ui.close()
+end)
+test('bulk remote UI deletion lists exact destinations and preserves local branches and tags', function()
+  local alice = git.session(a)
+  assert(alice.remote_add('team/upstream', remote))
+  for _, branch in ipairs({ 'feature/deep/one', 'feature/deep/two' }) do
+    command(a, { 'branch', branch }); command(a, { 'tag', branch })
+    assert(alice.push('team/upstream', 'refs/heads/' .. branch .. ':refs/heads/' .. branch))
+    assert(alice.push('team/upstream', 'refs/tags/' .. branch .. ':refs/tags/' .. branch))
+  end
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local old_select, old_confirm = vim.ui.select, vim.fn.confirm
+  local picked, confirmation, confirmations, cancel_picker = {}, 2, 0, true
+  vim.ui.select = function(items, opts, cb)
+    if cancel_picker then cb(nil); return end
+    for _, target in ipairs(items) do
+      if target.remote == 'team/upstream' and target.branch:find('feature/deep/', 1, true) then
+        assert(not picked[target.branch], 'Selected remote destination is removed')
+        equal(opts.format_item(target), 'remote: team/upstream | branch: ' .. target.branch, 'Remote and full branch shown separately')
+        picked[target.branch] = true; cb(target); return
+      end
+    end
+    cb(nil)
+  end
+  vim.fn.confirm = function(message, _, default)
+    confirmations = confirmations + 1
+    equal(default, 2, 'Remote batch confirmation defaults to cancellation')
+    for _, branch in ipairs({ 'feature/deep/one', 'feature/deep/two' }) do
+      assert(message:find('remote: team/upstream | branch: ' .. branch, 1, true), 'Confirmation lists exact destination')
+    end
+    return confirmation
+  end
+  action('gbx'); equal(confirmations, 0, 'Empty selection cancels without confirmation')
+  cancel_picker = false; action('gbx')
+  assert(alice.remote_branch_exists('team/upstream', 'feature/deep/one') and alice.remote_branch_exists('team/upstream', 'feature/deep/two'), 'Cancelled confirmation preserves entire batch')
+  picked, confirmation = {}, 1; action('gbx')
+  equal(confirmations, 2, 'Each batch uses one confirmation')
+  for _, branch in ipairs({ 'feature/deep/one', 'feature/deep/two' }) do
+    assert(not alice.remote_branch_exists('team/upstream', branch), 'Selected remote branch deleted')
+    assert(alice.has_local_branch(branch), 'Local branch remains')
+    equal(command(remote, { 'rev-parse', 'refs/tags/' .. branch }), command(a, { 'rev-parse', 'main' }), 'Same-named remote tag remains')
+  end
+  assert(alice.remote_branch_exists('origin', 'main'), 'Unselected remote branch remains')
+  assert(notifications[#notifications]:find('Deleted: remote: team/upstream | branch: feature/deep/one', 1, true), 'Summary identifies destination')
+  vim.ui.select, vim.fn.confirm = old_select, old_confirm; ui.close()
+end)
+test('bulk remote UI deletion reports a rejected branch and still deletes other selected destinations', function()
+  local alice = git.session(a)
+  assert(alice.push('origin', 'main:kept')); assert(alice.push('origin', 'main:removed'))
+  local hook = remote .. '/hooks/pre-receive'
+  vim.fn.writefile({ '#!/bin/sh', 'while read old new ref; do', '  if test "$ref" = refs/heads/kept; then echo "kept is protected" >&2; exit 1; fi', 'done' }, hook)
+  vim.fn.setfperm(hook, 'rwxr-xr-x')
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local old_select, old_confirm = vim.ui.select, vim.fn.confirm
+  local choices, index = { 'kept', 'removed' }, 0
+  vim.ui.select = function(items, _, cb)
+    index = index + 1
+    for _, target in ipairs(items) do if target.branch == choices[index] then cb(target); return end end
+    cb(nil)
+  end
+  vim.fn.confirm = function() return 1 end
+  action('gbx')
+  assert(alice.remote_branch_exists('origin', 'kept'), 'Rejected destination remains intact')
+  assert(not alice.remote_branch_exists('origin', 'removed'), 'Other selected destination still deleted')
+  assert(alice.remote_branch_exists('origin', 'main'), 'Unselected destination remains intact')
+  local message = notifications[#notifications]
+  assert(message:find('Failed: remote: origin | branch: kept', 1, true) and message:find('Deleted: remote: origin | branch: removed', 1, true), 'Partial outcome identifies both destinations')
+  assert(message:find('kept is protected', 1, true), 'Server diagnostic included')
+  vim.ui.select, vim.fn.confirm = old_select, old_confirm; ui.close()
+end)
+test('bulk force UI deletion protects worktree branches and cancels stale selections', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('unique-one'))
+  vim.fn.writefile({ 'unique' }, a .. '/unique'); assert(alice.stage('unique')); assert(alice.commit('Unique'))
+  command(a, { 'branch', 'unique-two' }); assert(alice.switch('main'))
+  command(a, { 'worktree', 'add', '-b', 'linked-topic', root .. '/linked-topic' })
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local old_select, old_confirm = vim.ui.select, vim.fn.confirm
+  local choices, index, confirmations, confirmation = { 'unique-one', 'linked-topic', 'unique-two' }, 0, 0, 2
+  vim.ui.select = function(items, opts, cb)
+    assert(opts.prompt:find('Force delete', 1, true), 'Force picker remains explicit')
+    index = index + 1; cb(choices[index])
+  end
+  vim.fn.confirm = function(message, _, default)
+    confirmations = confirmations + 1
+    assert(message:find('Force delete 3 local branches?', 1, true), 'Force applies to whole confirmed list')
+    equal(default, 2, 'Force confirmation defaults to cancellation')
+    return confirmation
+  end
+  action('gbD')
+  for _, branch in ipairs(choices) do assert(alice.has_local_branch(branch), 'Force cancellation preserves every branch') end
+  index, confirmation = 0, 1; action('gbD')
+  assert(not alice.has_local_branch('unique-one') and not alice.has_local_branch('unique-two'), 'Confirmed force deletes unmerged branches')
+  assert(alice.has_local_branch('linked-topic'), 'Linked worktree branch remains protected')
+  assert(notifications[#notifications]:find('Failed: linked-topic', 1, true), 'Protected branch refusal reported')
+  command(a, { 'branch', 'stale-one' }); command(a, { 'branch', 'stale-two' })
+  local pending
+  vim.ui.select = function(items, _, cb)
+    if vim.tbl_contains(items, 'stale-one') then cb('stale-one') else pending = cb end
+  end
+  vim.fn.confirm = function() error('Stale multi-selection must not reach confirmation') end
+  action('gbd'); assert(pending, 'Second selection can be delayed')
+  command(a, { 'branch', 'external-change' }); pending(nil)
+  assert(alice.has_local_branch('stale-one') and alice.has_local_branch('stale-two'), 'Ref change preserves selected branches')
+  vim.ui.select, vim.fn.confirm = old_select, old_confirm; ui.close()
 end)
 test('remote deletion omits unsupported fetch mappings instead of guessing a remote branch', function()
   local alice = git.session(a)
