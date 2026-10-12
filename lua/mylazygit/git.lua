@@ -778,7 +778,7 @@ function M.cleanup_target(target, message)
 					if not index_restored then table.insert(output, "Cannot restore index: " .. tostring(restore_error) .. "; original index saved at " .. backup) end
 				else uv.fs_unlink(backup) end
 			else uv.fs_unlink(backup) end
-		else ok, output = system({ "rebase", "--no-update-refs", "--", target.onto }) end
+		else ok, output = system({ "rebase", "--no-update-refs", "--no-autostash", "--", target.base }) end
 		if target.rewrite and (head_oid() ~= target.head or M.repository_state().operation) then
 			cleanup_reviews[cleanup_key] = cleanup_reviews[cleanup_key] or {}
 			cleanup_reviews[cleanup_key][target.local_branch] = vim.deepcopy(target.rewrite)
@@ -1053,71 +1053,100 @@ function M.pr_head_branch(branch, remote)
 	return nil
 end
 
+--- History-preserving integration; progress describes only steps actually completed.
 function M.merge_workflow(opts)
 	opts = opts or {}
-	local main_branch = opts.main_branch
-	local feature_branch = opts.feature_branch
-	local rebase_args = vim.deepcopy(opts.rebase_args or {})
-
-	if not main_branch or main_branch == "" then
-		return false, { "Main branch is required for merge workflow" }
+	local main, feature = opts.main_branch, opts.feature_branch
+	local replay = opts.mode == "rebase"
+	local integration_label = (replay and "rebase " or "merge main into ") .. tostring(feature)
+	local progress = { completed = {}, remaining = {} }
+	local function merge(ref, ff)
+		-- Command flags override pull/merge/branch options; never autostash or squash.
+		return system({ "merge", ff and "--ff-only" or "--ff", "--commit", "--no-edit", "--no-autostash", "--no-squash", "--", ref })
 	end
-	if not feature_branch or feature_branch == "" then
-		return false, { "Feature branch is required for merge workflow" }
+	local function sync(branch, ff)
+		local target, err = upstream_target(branch)
+		if not target then return false, { err } end
+		local fetched, diagnostics = system({ "fetch", "--no-tags", "--", target.remote, target.ref })
+		if not fetched then return false, diagnostics end
+		local inspected, refs = system({ "rev-parse", "--verify", "FETCH_HEAD^{commit}" }, { silent = true })
+		if not inspected or not refs[1] then return false, { "Cannot inspect fetched synchronization target for " .. branch } end
+		return merge(refs[1], ff)
 	end
-	if not M.has_local_branch(main_branch) then
-		return false, { string.format("Local branch %s not found", main_branch) }
+	local function integrate()
+		if not replay then return merge("refs/heads/" .. main) end
+		local protected = vim.list_extend({ main }, vim.deepcopy(opts.protected or {}))
+		local target, err = M.resolve_cleanup_target("rebase", { onto = main, protected = protected })
+		if not target then return false, { err } end
+		if not opts.review_cleanup then return false, { "Explicit cleanup review required before rebasing feature history" } end
+		local confirmed = M.without_mutation(opts.review_cleanup, target)
+		if not confirmed then progress.cancelled = true; return false, { "Rebase review cancelled; no feature history replayed" } end
+		local success, diagnostics = M.cleanup_target(target)
+		if target.rewrite then progress.publication = "reviewed-rewrite" end
+		return success, diagnostics
 	end
-	if not M.has_local_branch(feature_branch) then
-		return false, { string.format("Local branch %s not found", feature_branch) }
-	end
-
-	local function pull_step(branch)
-		local upstream = M.branch_upstream(branch)
-		if not upstream then
-			return nil
-		end
-		local label = string.format("pull --rebase %s (%s/%s)", branch, upstream.remote, upstream.branch)
-		return {
-			label = label,
-			args = { "pull", "--rebase", upstream.remote, upstream.branch },
-		}
-	end
-
 	local steps = {
-		{ label = string.format("checkout %s", main_branch), args = { "checkout", main_branch } },
+		{ label = "checkout " .. tostring(main), run = function() return M.switch(main) end },
+		{ label = "fast-forward main " .. tostring(main), run = function() return sync(main, true) end },
+		{ label = "checkout " .. tostring(feature), run = function() return M.switch(feature) end },
+		{ label = "merge feature upstream " .. tostring(feature), run = function() return sync(feature, false) end },
+		{ label = integration_label, run = integrate },
+		{ label = "checkout " .. tostring(main), run = function() return M.switch(main) end },
+		{ label = "merge feature into " .. tostring(main), run = function() return merge("refs/heads/" .. feature) end },
 	}
-	local pull_main = pull_step(main_branch)
-	if pull_main then
-		table.insert(steps, pull_main)
-	end
-	table.insert(steps, { label = string.format("checkout %s", feature_branch), args = { "checkout", feature_branch } })
-	local pull_feature = pull_step(feature_branch)
-	if pull_feature then
-		table.insert(steps, pull_feature)
-	end
-
-	local rebase_cmd = { "rebase" }
-	if type(rebase_args) == "table" then
-		vim.list_extend(rebase_cmd, rebase_args)
-	end
-	table.insert(rebase_cmd, main_branch)
-	table.insert(steps, { label = string.format("rebase %s onto %s", feature_branch, main_branch), args = rebase_cmd })
-
-	table.insert(steps, { label = string.format("checkout %s", main_branch), args = { "checkout", main_branch } })
-	table.insert(steps, { label = string.format("merge %s", feature_branch), args = { "merge", feature_branch } })
-
-	for _, step in ipairs(steps) do
-		local ok, output = system(step.args)
-		if not ok then
-			local msg = string.format("Merge workflow failed while attempting to %s", step.label)
-			local details = output or {}
-			table.insert(details, 1, msg)
-			return false, details
+	for _, step in ipairs(steps) do table.insert(progress.remaining, step.label) end
+	local ok, output, result = M.mutate("merge_workflow", function()
+		if not main or not feature or main == "" or feature == "" or main == feature then
+			progress.failed = "validate branches"
+			return false, { "Choose distinct local main and feature branches for the workflow" }
 		end
-	end
-
-	return true, { string.format("Merge workflow completed for %s -> %s", feature_branch, main_branch) }
+		if not M.has_local_branch(main) or not M.has_local_branch(feature) then
+			progress.failed = "validate branches"
+			return false, { "Both workflow branches must exist locally" }
+		end
+		if opts.mode and opts.mode ~= "merge" and opts.mode ~= "rebase" then
+			progress.failed = "validate integration choice"; return false, { "Choose merge or an explicit reviewed rebase" }
+		end
+		if opts.rebase_args and (type(opts.rebase_args) ~= "table" or next(opts.rebase_args)) then
+			progress.failed = "validate integration choice"
+			return false, { "merge_workflow.rebase_args is no longer supported; choose reviewed rebase explicitly (gbr or gbw)" }
+		end
+		-- Validate both synchronization mappings before any branch moves.
+		for _, branch in ipairs({ main, feature }) do
+			local target, err = upstream_target(branch)
+			if not target then progress.failed = "validate synchronization targets"; return false, { err } end
+			if not select(1, system({ "check-ref-format", target.ref }, { silent = true }))
+				or (target.remote ~= "." and not M.remote_get_url(target.remote)) then
+				progress.failed = "validate synchronization targets"
+				return false, { "Invalid upstream for " .. branch .. "; configure a valid remote and full branch ref" }
+			end
+		end
+		if #M.status() > 0 then
+			progress.failed = "validate clean worktree"
+			return false, { "Commit or stash worktree and index changes before merge workflow; automatic stashing is disabled" }
+		end
+		progress.publication = "ordinary"
+		for _, step in ipairs(steps) do
+			local launched, success, diagnostics = pcall(step.run)
+			if not launched then success, diagnostics = false, { tostring(success) } end
+			if success then
+				local state = M.repository_state()
+				if state.operation or #state.conflicts > 0 then success, diagnostics = false, { "Step left an unfinished operation or unresolved conflicts" } end
+			end
+			if not success then
+				progress.failed = step.label
+				table.remove(progress.remaining, 1)
+				return false, vim.list_extend({ "Merge workflow stopped at: " .. step.label }, diagnostics or {})
+			end
+			table.insert(progress.completed, step.label)
+			table.remove(progress.remaining, 1)
+		end
+		return true, { "Merge workflow completed for " .. feature .. " -> " .. main .. "; publish main with ordinary push. " ..
+			(progress.publication == "reviewed-rewrite" and "Publish feature with gPF using its pre-cleanup reviewed lease." or "Publish feature with ordinary push.") }
+	end, { expected = opts.expected, target = { main_branch = main, feature_branch = feature } })
+	result.workflow = progress
+	if progress.cancelled then result.status = "cancelled" end
+	return ok, output, result
 end
 
 function M.switch(branch)
@@ -1855,7 +1884,7 @@ local function mutation_target(name, args)
 	return target
 end
 
-local synchronous = { "stage", "unstage", "restore", "commit", "reset_soft", "init", "commit_amend", "stash_push", "stash_pop", "stash_drop", "pull", "pull_rebase", "push", "pull_target", "push_target", "push_rewrite_target", "merge", "rebase", "merge_workflow", "switch", "checkout_detached", "checkout", "switch_create", "switch_remote", "fetch_and_switch_remote", "remote_add", "remote_set_url", "delete_local_branch", "delete_branch", "rename_branch", "delete_remote_branch", "fetch", "check_conflicts", "create_pull_request" }
+local synchronous = { "stage", "unstage", "restore", "commit", "reset_soft", "init", "commit_amend", "stash_push", "stash_pop", "stash_drop", "pull", "pull_rebase", "push", "pull_target", "push_target", "push_rewrite_target", "merge", "rebase", "switch", "checkout_detached", "checkout", "switch_create", "switch_remote", "fetch_and_switch_remote", "remote_add", "remote_set_url", "delete_local_branch", "delete_branch", "rename_branch", "delete_remote_branch", "fetch", "check_conflicts", "create_pull_request" }
 for _, name in ipairs(synchronous) do
 	local original = M[name]
 	M[name] = function(...)

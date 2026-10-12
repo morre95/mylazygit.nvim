@@ -11,7 +11,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Run `git init`, `git pull --rebase`, `git push`, and `git fetch`, with separate resolved pull and push targets
 - Create GitHub pull requests from inside Neovim via `gh pr create`
 - Create a GitHub repository from the current local repo via `gh repo create --source . --push` with private/public visibility
-- One-key merge workflow that rebases a feature branch on main before merging it back
+- Merge workflow that preserves shared feature history, with a separate reviewed rebase choice
 - Temporary detached-checkout of selected commits (`gct`) with quick return (`gcr`) for commit-by-commit inspection
 - Refresh view at any time to keep the status in sync
 
@@ -30,7 +30,6 @@ return {
       branch_fallback = branch, -- default for workflow/base branch selection; sync refuses detached HEAD
       merge_workflow = {
         main_branch = branch,   -- base branch for the workflow helper
-        rebase_args = {},       -- extra args for `git rebase` (e.g. { '-i' })
       },
       protected_branches = {},  -- branches gPF never rewrites, besides main and main_branch
       log_limit = 5,            -- number of log messages shown in the panel
@@ -55,7 +54,11 @@ return {
 }
 ```
 
-> **Note:** The workflow operates only on local branches. It will pull a branch only when it has an upstream configured (`branch@{upstream}`); otherwise the pull step is skipped. Pull steps are run with `--rebase` to keep history linear and avoid merge commits like `Merge branch 'main' of ...` after conflict resolution. Interactive rebases (e.g. `rebase_args = { '-i' }`) still require a working `$GIT_SEQUENCE_EDITOR` inside Neovim (many users rely on `nvr --remote-wait`); without that setup Git will block waiting for an editor.
+`gbw` operates on two local branches with valid upstreams and a clean worktree/index. It first fetches and fast-forwards main; divergence stops for your decision. It then fetches and merges the feature upstream, merges main into the feature, and merges the feature into main. The default **Merge** choice preserves published commit identities and allows ordinary publication with `P`. Missing, invalid or deleted synchronization targets stop the workflow; they are never skipped. Git settings such as `pull.rebase`, `merge.ff`, autostash and branch merge options cannot silently select replay, squash or leave a successful merge uncommitted.
+
+The separate **Rebase** choice uses the same cleanup review as `gbr`: private replay needs explicit confirmation; published replay requires **Rewrite**, with protected branches and unknown publication evidence refused. Published cleanup retains the remote commit reviewed before replay for later `gPF`. `merge_workflow.rebase_args` is no longer supported: remove nonempty legacy arguments and choose reviewed rebase explicitly. Nothing in setup enables automatic rebase.
+
+Cancellation at branch/integration selection changes no refs or index. Rebase review happens after synchronization; cancelling there preserves feature history and reports the synchronization steps already completed. On any conflict, hook rejection or other failed step, the workflow stops and reports the current repository state and completed, failed and remaining steps. Resolve conflicts with `X`, then use `gx` to recover the interrupted Git operation. Recovery does not resume the workflow. Inspect the remaining work and make a new explicit decision; publication always remains manual. After successful integration, publish main with ordinary `P`; switch to the feature to publish with `P` for merges/private replay or `gPF` for a reviewed published rewrite.
 
 The plugin registers a `:MyLazyGit` command. Map it or call it directly:
 
@@ -110,7 +113,7 @@ Key | Action
 `gbD` | Force delete local branch (`git branch -D`)
 `gbx` | Confirm the exact remote and full branch, then delete it (`git push <remote> --delete refs/heads/<branch>`)
 `gbm` | Merge selected local branch into current branch
-`gbw` | Run merge workflow helper (sync/rebase/merge flow)
+`gbw` | Integrate feature with history-preserving merges, or choose reviewed rebase
 `gbr` | Review and rebase current branch onto selected branch
 `gzz` | Stash push
 `gzp` | Stash pop
@@ -220,6 +223,10 @@ Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(t
 Intentional rewrites use `repo.resolve_rewrite_target(opts)`, which resolves the push destination, refuses `main`, any additional protected branches in `opts.protected`, and missing remote history, and records the reviewed remote commit as `target.expected`. After review, set `target.confirmed = true` and execute `repo.push_rewrite_target(target)` or `repo.push_rewrite_target_async(target, callback)`. Execution revalidates source commit, branch, destination and protection, then leases exactly `target.ref:target.expected`; a stale lease fails without changing remote history.
 
 History cleanup uses `repo.resolve_cleanup_target(operation, opts)` with `operation` equal to `amend`, `squash` (`opts.count`) or `rebase` (`opts.onto`, a local branch), and optional additional `opts.protected` branches. The returned target captures repository intent, affected-history classification and any reviewed publication lease. Set `target.confirmed = true` for the explicit operation choice; published history also requires `target.rewrite_confirmed = true`. Execute with `repo.cleanup_target(target, message)` and inspect its mutation outcome for recovery state. The compatible `commit_amend(message, target)` and `rebase(branch, target)` entrypoints require that review target. `repo.resolve_cleanup_publication(opts)` returns the retained pre-cleanup lease with the current source HEAD for a later confirmed rewrite; successful rewrite publication clears it. Reviews live for the current Neovim process and are scoped to the physical worktree and local branch.
+
+`repo.merge_workflow({ main_branch = "main", feature_branch = "topic" })` runs the history-preserving workflow under one repository reservation. Both branches must have valid upstreams; main synchronization is fast-forward only. The third return value is the mutation outcome, including `state`, `recovery` and `workflow`: `completed` lists successful steps, `failed` identifies the stopped step, and `remaining` lists subsequent steps that did not run (excluding the failed step). Preflight refusal leaves all planned steps remaining. After execution starts, `workflow.publication` is `ordinary` or `reviewed-rewrite`; no workflow pushes automatically.
+
+For explicit replay, pass `mode = "rebase"`, optional `protected` branches, and `review_cleanup = function(target) ... end`. The callback receives the existing cleanup review target after synchronization and must obtain an explicit choice, set `target.confirmed = true` (plus `target.rewrite_confirmed = true` for published history), and return true. A false/nil return cancels replay and returns status `cancelled`, with earlier synchronization still reported. The callback runs outside mutation ownership; cleanup revalidates its review afterward. Unknown publication evidence and protected published history are refused before the callback. After a published replay, switch to the feature and use `resolve_cleanup_publication` to retrieve the retained pre-cleanup lease. `mode = "merge"` is the default, regardless of Git rebase preferences or legacy setup arguments.
 
 Branch deletion uses separate inputs: `repo.delete_local_branch(name, force)` acts only on local branches (`delete_branch` remains a compatible alias), while `repo.delete_remote_branch(remote, branch)` takes the configured remote and full branch name separately. `repo.remote_branch_destinations()` returns unambiguous `{ remote = ..., branch = ... }` entries for deletion pickers; `repo.remote_branches()` keeps its existing string interface.
 
