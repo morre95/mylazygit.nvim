@@ -2,12 +2,15 @@ local reservations = {}
 local observers = {}
 local fetch_records = {}
 local cleanup_reviews = {}
+-- Interrupted integration plans exist only in this editor process.
+local workflows = {}
 
 local function create_session(cwd)
 local M = {}
 local function pack(...) return { n = select("#", ...), ... } end
 local token
 local expected_intent
+local key, in_context
 local cleanup_key = (vim.uv or vim.loop).fs_realpath(cwd) or cwd
 
 local function trim(s)
@@ -1095,6 +1098,43 @@ function M.merge_workflow(opts)
 		{ label = "merge feature into " .. tostring(main), run = function() return merge("refs/heads/" .. feature) end },
 	}
 	for _, step in ipairs(steps) do table.insert(progress.remaining, step.label) end
+	local plan = { progress = progress, next = 1, worktree = key, feature_ref = "refs/heads/" .. tostring(feature) }
+	plan.advance = function(owner)
+		return in_context(owner, function()
+		for index = plan.next, #steps do
+			local step = steps[index]
+			local launched, success, diagnostics = pcall(step.run)
+			if not launched then success, diagnostics = false, { tostring(success) } end
+			if success then
+				local state = M.repository_state()
+				if state.operation or #state.conflicts > 0 then success, diagnostics = false, { "Step left an unfinished operation or unresolved conflicts" } end
+			end
+			if not success then
+				progress.failed = step.label
+				plan.next = index + 1
+				plan.pause = M.repository_state()
+				progress.status = plan.pause.operation and "paused" or "stopped"
+				table.remove(progress.remaining, 1)
+				return false, vim.list_extend({ "Merge workflow stopped at: " .. step.label }, diagnostics or {})
+			end
+			table.insert(progress.completed, step.label)
+			table.remove(progress.remaining, 1)
+		end
+		progress.failed, progress.status = nil, "complete"
+		return true, { "Merge workflow completed for " .. feature .. " -> " .. main .. "; publish main with ordinary push. " ..
+			(progress.publication == "reviewed-rewrite" and "Publish feature with gPF using its pre-cleanup reviewed lease." or "Publish feature with ordinary push.") }
+		end)
+	end
+	plan.mapping = function()
+		local mappings = {}
+		for _, branch in ipairs({ main, feature }) do
+			local target = upstream_target(branch)
+			if not target then return nil end
+			local ok, urls = system({ "remote", "get-url", "--all", target.remote }, { silent = true })
+			mappings[branch] = { remote = target.remote, ref = target.ref, urls = target.remote == "." and {} or (ok and urls or false) }
+		end
+		return mappings
+	end
 	local ok, output, result = M.mutate("merge_workflow", function()
 		if not main or not feature or main == "" or feature == "" or main == feature then
 			progress.failed = "validate branches"
@@ -1126,25 +1166,11 @@ function M.merge_workflow(opts)
 			return false, { "Commit or stash worktree and index changes before merge workflow; automatic stashing is disabled" }
 		end
 		progress.publication = "ordinary"
-		for _, step in ipairs(steps) do
-			local launched, success, diagnostics = pcall(step.run)
-			if not launched then success, diagnostics = false, { tostring(success) } end
-			if success then
-				local state = M.repository_state()
-				if state.operation or #state.conflicts > 0 then success, diagnostics = false, { "Step left an unfinished operation or unresolved conflicts" } end
-			end
-			if not success then
-				progress.failed = step.label
-				table.remove(progress.remaining, 1)
-				return false, vim.list_extend({ "Merge workflow stopped at: " .. step.label }, diagnostics or {})
-			end
-			table.insert(progress.completed, step.label)
-			table.remove(progress.remaining, 1)
-		end
-		return true, { "Merge workflow completed for " .. feature .. " -> " .. main .. "; publish main with ordinary push. " ..
-			(progress.publication == "reviewed-rewrite" and "Publish feature with gPF using its pre-cleanup reviewed lease." or "Publish feature with ordinary push.") }
+		plan.mappings = plan.mapping()
+		workflows[key] = plan
+		return plan.advance(token)
 	end, { expected = opts.expected, target = { main_branch = main, feature_branch = feature } })
-	result.workflow = progress
+	result.workflow = vim.deepcopy(progress)
 	if progress.cancelled then result.status = "cancelled" end
 	return ok, output, result
 end
@@ -1669,8 +1695,8 @@ local function reservation_key()
 	local path = vim.v.shell_error == 0 and root[1] or cwd
 	return (vim.uv or vim.loop).fs_realpath(path) or vim.fn.fnamemodify(path, ":p")
 end
-local key = reservation_key()
-local function in_context(owner, fn, ...)
+key = reservation_key()
+in_context = function(owner, fn, ...)
 	local previous = token
 	token = owner
 	local result = pack(pcall(fn, ...))
@@ -1718,7 +1744,8 @@ end
 
 local function operation_identity(path)
 	local stat = (vim.uv or vim.loop).fs_stat(path)
-	local parts = {}
+	-- Same commits can be aborted and started again: contents alone do not identify that operation.
+	local parts = stat and { tostring(stat.ino), tostring(stat.mtime.sec), tostring(stat.mtime.nsec) } or {}
 	local files = stat and stat.type == "directory" and { "orig-head", "onto", "head-name", "stopped-sha", "original-commit", "next", "last", "done", "git-rebase-todo", "head", "abort-safety", "todo" } or { "" }
 	for _, file in ipairs(files) do
 		local candidate = file == "" and path or path .. "/" .. file
@@ -1746,7 +1773,7 @@ function M.repository_state()
 		if path and (vim.uv or vim.loop).fs_stat(path) then operation, operation_id = entry[2], operation_identity(path); break end
 	end
 	return { head = head_ok and head[1] or nil, branch = branch_ok and branch[1] or nil, index = table.concat(index, "\n"), status = status, unstaged = table.concat(unstaged, "\n"),
-		refs = refs, conflicts = conflicts_ok and conflicts or {}, conflicts_known = conflicts_ok, operation = operation, operation_id = operation_id, running = reservations[key] and reservations[key].action or nil }
+		refs = refs, conflicts = conflicts_ok and conflicts or {}, conflicts_known = conflicts_ok, operation = operation, operation_id = operation_id, workflow = workflows[key] and vim.deepcopy(workflows[key].progress) or nil, running = reservations[key] and reservations[key].action or nil }
 end
 
 local function recovery(state)
@@ -1762,7 +1789,7 @@ end
 local function outcome(action, status, output, before, target)
 	local current = M.repository_state()
 	return { status = status, action = action, target = target or { worktree = cwd }, diagnostics = output or {},
-		state = current, recovery = recovery(current), changed = before and (before.head ~= current.head or before.branch ~= current.branch or not vim.deep_equal(before.status, current.status) or before.index ~= current.index or before.unstaged ~= current.unstaged or not vim.deep_equal(before.refs, current.refs) or before.operation ~= current.operation or before.operation_id ~= current.operation_id) or false }
+		state = current, workflow = current.workflow, recovery = recovery(current), changed = before and (before.head ~= current.head or before.branch ~= current.branch or not vim.deep_equal(before.status, current.status) or before.index ~= current.index or before.unstaged ~= current.unstaged or not vim.deep_equal(before.refs, current.refs) or before.operation ~= current.operation or before.operation_id ~= current.operation_id) or false }
 end
 function M.cancel_mutation(action, target)
 	local result = outcome(action, "cancelled", { "Action cancelled" }, M.repository_state(), target)
@@ -1910,7 +1937,55 @@ function M.recover(operation, action, callback, opts)
 		if current.operation ~= operation then done(false, { "Interrupted operation changed; inspect repository and retry" }); return end
 		local allowed = action == "abort" or action == "continue" or ((operation == "rebase" or operation == "cherry-pick" or operation == "revert") and action == "skip")
 		if not allowed or not vim.tbl_contains({ "merge", "rebase", "cherry-pick", "revert" }, operation) then done(false, { "Unsupported recovery action" }); return end
-		system_async({ operation, "--" .. action }, { env = { GIT_EDITOR = "true" } }, done)
+		local plan = workflows[key]
+		local resumable = plan and plan.progress.status == "paused"
+		local valid = resumable and plan.worktree == key and plan.pause.head == current.head and plan.pause.branch == current.branch
+			and plan.pause.operation == current.operation and plan.pause.operation_id == current.operation_id
+			and vim.deep_equal(plan.pause.refs, current.refs) and vim.deep_equal(plan.mappings, plan.mapping())
+		if action == "continue" and (not current.conflicts_known or #current.conflicts > 0) then
+			done(false, { "Resolve and stage all conflicts before continuing; unmerged index inspection must succeed." }); return
+		end
+		local owner = token
+		system_async({ operation, "--" .. action }, { env = { GIT_EDITOR = "true" } }, function(ok, output)
+			in_context(owner, function()
+				local after = M.repository_state()
+				-- Recovery may move only its active branch; external refs/config must still match.
+				local function other_refs(refs)
+					local filtered = {}
+					local affected = current.branch or (plan and plan.feature_ref)
+					for _, ref in ipairs(refs) do
+						if ref:match("^(%S+) ") ~= affected then filtered[#filtered + 1] = ref end
+					end
+					return filtered
+				end
+				valid = valid and vim.deep_equal(other_refs(current.refs), other_refs(after.refs))
+					and vim.deep_equal(plan.mappings, plan.mapping())
+					and (after.operation == nil or after.operation == operation)
+					and ((after.operation and after.branch == current.branch) or (not after.operation and after.branch == (current.branch or plan.feature_ref)))
+					and (after.operation or (after.conflicts_known and #after.conflicts == 0 and #after.status == 0))
+				if resumable then
+					if ok and not after.operation and action ~= "abort" then
+						table.insert(plan.progress.completed, plan.progress.failed)
+						plan.progress.failed = nil
+					end
+					if action == "abort" and ok then
+						plan.progress.status = "aborted"
+						table.insert(output, "Workflow aborted; completed synchronization remains intact. Publication remains manual.")
+					elseif not valid then
+						plan.progress.status = "stopped"
+						plan.progress.reason = "Workflow prerequisites changed; remaining steps were not run. Inspect repository and start a new workflow."
+						table.insert(output, plan.progress.reason)
+					elseif after.operation then
+						plan.pause = after
+					elseif ok then
+						local advanced, diagnostics = plan.advance(owner)
+						vim.list_extend(output, diagnostics or {})
+						ok = advanced
+					end
+				end
+				done(ok, output)
+			end)
+		end)
 	end, callback, opts)
 end
 
