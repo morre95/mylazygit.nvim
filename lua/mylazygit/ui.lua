@@ -1,4 +1,5 @@
 local M = {}
+local resize_layout
 
 local namespace = vim.api.nvim_create_namespace("mylazygit")
 
@@ -22,6 +23,7 @@ local state = {
 	current_commit_line = 1,
 	autocmd_group = nil,
 	dimensions = nil,
+	info_height = 2,
 }
 
 local bottom_view_labels = {
@@ -539,7 +541,7 @@ local function create_sections()
 	local right_width = inner_width - left_width - right_padding
 	local right_col = left_col + left_width + right_padding
 
-	local info_height = 8
+	local info_height = state.info_height
 	local keymap_height = 3
 	local content_row = info_height + 1
 	local gap = 2
@@ -620,6 +622,10 @@ local function render_info(info)
 		end
 	else
 		table.insert(lines, "")
+	end
+	if state.info_height ~= #lines then
+		state.info_height = #lines
+		resize_layout()
 	end
 	lines = pad_lines(lines, state.dimensions.height)
 	set_buffer_lines(state.root.buf, lines, { filetype = "mylazygit-root" })
@@ -915,7 +921,7 @@ function M.render(payload)
 	render_keymap(payload.keymap or {})
 end
 
-local function resize_layout()
+resize_layout = function()
 	if not M.is_open() then
 		return
 	end
@@ -930,7 +936,7 @@ local function resize_layout()
 	local right_width = inner_width - left_width - right_padding
 	local right_col = left_col + left_width + right_padding
 
-	local info_height = 8
+	local info_height = state.info_height
 	local keymap_height = 3
 	local content_row = info_height + 1
 	local gap = 2
@@ -981,6 +987,7 @@ function M.open()
 		return state.root.buf, state.root.win
 	end
 	create_root()
+	state.info_height = 2
 	state.bottom_view_data = nil
 	state.current_bottom_view_index = 1
 	state.bottom_view_line = {}

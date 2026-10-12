@@ -427,7 +427,7 @@ function M.refresh()
 	local lifecycle = git.repository_state()
 	if lifecycle.running then table.insert(layout.info.details, "Running: " .. lifecycle.running)
 	elseif lifecycle.operation or #lifecycle.conflicts > 0 then table.insert(layout.info.details, "Recovery: " .. (lifecycle.operation or "conflicts") .. " · [X] resolve · [gx] continue/abort")
-	else table.insert(layout.info.details, "Repository: ready") end
+	else layout.info.details[1] = layout.info.details[1] .. " · Repository: ready" end
 	if lifecycle.workflow then
 		table.insert(layout.info.details, "Workflow: " .. (lifecycle.workflow.status or "stopped") .. (lifecycle.workflow.failed and (" · " .. lifecycle.workflow.failed) or ""))
 		table.insert(layout.info.details, "Remaining: " .. (#lifecycle.workflow.remaining > 0 and table.concat(lifecycle.workflow.remaining, "; ") or "none"))
