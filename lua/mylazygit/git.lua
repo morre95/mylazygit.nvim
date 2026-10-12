@@ -1,12 +1,14 @@
 local reservations = {}
 local observers = {}
 local fetch_records = {}
+local cleanup_reviews = {}
 
 local function create_session(cwd)
 local M = {}
 local function pack(...) return { n = select("#", ...), ... } end
 local token
 local expected_intent
+local cleanup_key = (vim.uv or vim.loop).fs_realpath(cwd) or cwd
 
 local function trim(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -207,11 +209,11 @@ function M.init()
 	return system({ "init" })
 end
 
-function M.commit_amend(message)
-	if message and vim.trim(message) ~= "" then
-		return system({ "commit", "--amend", "-m", message })
+function M.commit_amend(message, target)
+	if not target or target.operation ~= "amend" then
+		return false, { "Review amend with resolve_cleanup_target and confirm cleanup_target before changing history." }
 	end
-	return system({ "commit", "--amend", "--no-edit" })
+	return M.cleanup_target(target, message)
 end
 
 -- Stash operations
@@ -693,6 +695,104 @@ function M.resolve_rewrite_target(opts)
 	return target
 end
 
+--- Review exactly the commits an operation can replace, using shared publication evidence.
+function M.resolve_cleanup_target(operation, opts)
+	opts = opts or {}
+	if not vim.tbl_contains({ "amend", "squash", "rebase" }, operation) then return nil, "Unsupported history cleanup operation" end
+	local snapshot = M.publication_snapshot()
+	if snapshot.state == "unknown" then return nil, "Publication is unknown; fetch or fix the push target before cleanup. " .. (snapshot.reason or "") end
+	local target = { operation = operation, head = snapshot.head, local_branch = M.current_branch(),
+		count = opts.count, onto = opts.onto, protected = vim.deepcopy(opts.protected or {}), expected = M.repository_state(), publication = "local-only" }
+	if not target.local_branch then return nil, "Switch to a local branch before history cleanup" end
+	local affected
+	if operation == "amend" then affected = { snapshot.head }
+	elseif operation == "squash" then
+		if type(target.count) ~= "number" or target.count < 1 or target.count % 1 ~= 0 then return nil, "Select a positive commit count for squash" end
+		local ok, output = system({ "rev-parse", "--verify", "HEAD~" .. target.count .. "^{commit}" }, { silent = true })
+		if not ok then return nil, "Squash needs a parent before the selected commits; the root commit cannot be included" end
+		target.base = output[1]
+		ok, affected = system({ "rev-list", target.base .. "..HEAD" }, { silent = true })
+		if not ok then return nil, "Cannot inspect squash history" end
+	else
+		if not target.onto or not M.has_local_branch(target.onto) then return nil, "Choose a local branch to rebase onto" end
+		local ok, output = system({ "rev-parse", "--verify", "refs/heads/" .. target.onto .. "^{commit}" }, { silent = true })
+		if not ok then return nil, "Cannot inspect rebase target" end
+		target.base = output[1]
+		ok, affected = system({ "rev-list", target.base .. "..HEAD" }, { silent = true })
+		if not ok then return nil, "Cannot inspect rebase history" end
+	end
+	local classifications = {}
+	for _, entry in ipairs(snapshot.commits) do classifications[entry.oid] = entry.publication end
+	for _, oid in ipairs(affected) do
+		if classifications[oid] == "unknown" or not classifications[oid] then return nil, "Publication of affected history is unknown" end
+		if classifications[oid] == "published" then target.publication = "published" end
+	end
+	if target.publication == "published" then
+		if is_protected_branch(target.local_branch, target.protected) then return nil, protected_refusal:format("refs/heads/" .. target.local_branch) end
+		local err; target.rewrite, err = M.resolve_cleanup_publication({ protected = target.protected })
+		if not target.rewrite and not err then target.rewrite, err = M.resolve_rewrite_target({ protected = target.protected }) end
+		if not target.rewrite then return nil, err end
+	else
+		local err; target.rewrite, err = M.resolve_cleanup_publication({ protected = target.protected })
+		if err then return nil, err end
+	end
+	return target
+end
+
+function M.cleanup_target(target, message)
+	if type(target) ~= "table" or not target.expected then return false, { "Review history cleanup before executing it" } end
+	return M.mutate("cleanup", function()
+		-- Compatible entrypoints can already own a reservation; still validate their review.
+		if not M.validate_state(target.expected) then return false, { "Cleanup repository intent changed since review; review again" } end
+		if not target.confirmed or (target.publication == "published" and not target.rewrite_confirmed) then
+			return false, { "Choose the cleanup operation explicitly; published history requires Rewrite confirmation." }
+		end
+		local current, err = M.resolve_cleanup_target(target.operation, { count = target.count, onto = target.onto, protected = target.protected })
+		if not current then return false, { err } end
+		if current.head ~= target.head or current.local_branch ~= target.local_branch or current.publication ~= target.publication or current.base ~= target.base then
+			return false, { "Cleanup history changed since review; review again" }
+		end
+		local ok, output
+		if target.rewrite then
+			local resolved, reason = revalidate_target(target.rewrite, "push")
+			if not resolved then return false, { reason } end
+		end
+		if target.operation == "amend" then
+			ok, output = system(message and vim.trim(message) ~= "" and { "commit", "--amend", "-m", message } or { "commit", "--amend", "--no-edit" })
+		elseif target.operation == "squash" then
+			ok, output = system({ "reset", "--soft", target.base })
+			if ok then
+				ok, output = system({ "commit", "-m", message or "Squashed commits" })
+				if not ok then
+					local restored, diagnostics = system({ "update-ref", "refs/heads/" .. target.local_branch, target.head, target.base })
+					if not restored then vim.list_extend(output, diagnostics) end
+				end
+			end
+		else ok, output = system({ "rebase", "--", target.onto }) end
+		if target.rewrite and (head_oid() ~= target.head or M.repository_state().operation) then
+			cleanup_reviews[cleanup_key] = cleanup_reviews[cleanup_key] or {}
+			cleanup_reviews[cleanup_key][target.local_branch] = vim.deepcopy(target.rewrite)
+		end
+		return ok, output
+	end, { expected = target.expected, target = target })
+end
+
+--- Return a cleanup's original reviewed lease, never a refreshed remote expectation.
+function M.resolve_cleanup_publication(opts)
+	local branch = M.current_branch()
+	local review = cleanup_reviews[cleanup_key] and cleanup_reviews[cleanup_key][branch]
+	if not review then return nil end
+	local target = vim.deepcopy(review)
+	target.head, target.confirmed = head_oid(), nil
+	target.protected = vim.list_extend(target.protected or {}, (opts or {}).protected or {})
+	local resolved, err = revalidate_target(target, "push")
+	if not resolved then return nil, err end
+	if is_protected_branch(branch, target.protected) or is_protected_branch(resolved.branch, target.protected) then
+		return nil, protected_refusal:format(resolved.ref)
+	end
+	return target
+end
+
 local function rewrite_args(target)
 	local resolved, err = revalidate_target(target, "push")
 	if not resolved then return nil, err end
@@ -707,10 +807,20 @@ local function rewrite_args(target)
 		"--", target.remote, "refs/heads/" .. target.local_branch .. ":" .. target.ref }
 end
 
+local function complete_cleanup_publication(target)
+	local reviews = cleanup_reviews[cleanup_key]
+	local review = reviews and reviews[target.local_branch]
+	if review and review.expected == target.expected and review.remote == target.remote and review.ref == target.ref then
+		reviews[target.local_branch] = nil
+	end
+end
+
 function M.push_rewrite_target(target)
 	local args, err = rewrite_args(target)
 	if not args then return false, { err } end
-	return system(args)
+	local ok, output = system(args)
+	if ok then complete_cleanup_publication(target) end
+	return ok, output
 end
 
 -- Async variants for network operations
@@ -746,7 +856,10 @@ end
 function M.push_rewrite_target_async(target, callback)
 	local args, err = rewrite_args(target)
 	if not args then callback(false, { err }); return end
-	system_async(args, { loading_msg = "Rewriting " .. target.remote .. " " .. target.ref .. "..." }, callback)
+	system_async(args, { loading_msg = "Rewriting " .. target.remote .. " " .. target.ref .. "..." }, function(ok, output)
+		if ok then complete_cleanup_publication(target) end
+		callback(ok, output)
+	end)
 end
 
 function M.fetch_async(remote, callback)
@@ -847,11 +960,11 @@ function M.merge(branch)
 	return system({ "merge", branch })
 end
 
-function M.rebase(branch)
-	if not branch or branch == "" then
-		return false, { "Branch name required for rebase" }
+function M.rebase(branch, target)
+	if not target or target.operation ~= "rebase" or target.onto ~= branch then
+		return false, { "Review rebase with resolve_cleanup_target and confirm cleanup_target before changing history." }
 	end
-	return system({ "rebase", branch })
+	return M.cleanup_target(target)
 end
 
 local function local_branch_ref(branch)
