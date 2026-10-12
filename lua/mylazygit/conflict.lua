@@ -28,7 +28,7 @@ local state = {
 }
 
 -- Parse a file and extract conflicts
-local function parse_conflicts(file_path)
+local function parse_conflicts(file_path, marker_size)
   local uv = vim.uv or vim.loop
   local fd = uv.fs_open(file_path, "r", 438)
   if not fd then
@@ -41,64 +41,63 @@ local function parse_conflicts(file_path)
   end
   local content = uv.fs_read(fd, stat.size, 0) or ""
   uv.fs_close(fd)
+  if content:find("\0", 1, true) then
+    return nil, "Binary conflict is unsupported; resolve externally and stage explicitly. File remains unresolved"
+  end
 
   local lines = vim.split(content, "\n", { plain = true })
-  local conflicts = {}
-  local chunks = {} -- Maintains file structure: {type="text", lines={...}} or {type="conflict", index=N}
-  local i = 1
-
-  while i <= #lines do
-    local line = lines[i]
-
-    -- Check for conflict marker
-    if line:match("^<<<<<<<") then
-      local conflict = {
-        start_line = i,
-        ours_start = i + 1,
-        separator_line = nil,
-        theirs_start = nil,
-        end_line = nil,
-        ours = {},
-        theirs = {},
-        resolved = false,
-        resolution = nil, -- "ours", "theirs", or custom lines
-      }
-
-      -- Read "ours" section
-      i = i + 1
-      while i <= #lines and not lines[i]:match("^=======") do
-        table.insert(conflict.ours, lines[i])
-        i = i + 1
-      end
-
-      conflict.separator_line = i
-
-      -- Read "theirs" section
-      i = i + 1
-      conflict.theirs_start = i
-      while i <= #lines and not lines[i]:match("^>>>>>>>") do
-        table.insert(conflict.theirs, lines[i])
-        i = i + 1
-      end
-
-      conflict.end_line = i
-
-      table.insert(conflicts, conflict)
-      -- Add conflict reference to chunks
-      table.insert(chunks, { type = "conflict", index = #conflicts })
-      i = i + 1
-    else
-      -- Non-conflict line - accumulate text
-      if #chunks > 0 and chunks[#chunks].type == "text" then
-        -- Add to existing text chunk
-        table.insert(chunks[#chunks].lines, line)
+  local conflicts, chunks = {}, {}
+  local current, section, marker_width
+  local function marker(line)
+    local text = line:gsub("\r$", "")
+    local kind = text:sub(1, 1)
+    if kind ~= "<" and kind ~= "|" and kind ~= "=" and kind ~= ">" then return end
+    local run, label = text:match("^(" .. kind .. "+)(.*)$")
+    -- Shortened marker runs must not become selectable side content. Preserve
+    -- ordinary one/two-character source operators when markers are wider.
+    local minimum = math.min(3, math.max(1, marker_size - 1))
+    if not run or #run < minimum then return end
+    return kind, #run, vim.trim(label), label == "" or label:match("^%s") ~= nil
+  end
+  local function malformed(i)
+    return nil, "Malformed conflict markers at line " .. i .. "; file remains unresolved"
+  end
+  for i, line in ipairs(lines) do
+    local kind, width, label, valid_label = marker(line)
+    if kind then
+      if not valid_label then return malformed(i) end
+      if not current then
+        if kind ~= "<" or width ~= marker_size then return malformed(i) end
+        current = { ours = {}, ancestor = {}, theirs = {}, raw = {}, resolved = false, ours_label = label }
+        marker_width, section = width, "ours"
       else
-        -- Create new text chunk
-        table.insert(chunks, { type = "text", lines = { line } })
+        if width ~= marker_width then return malformed(i) end
+        if kind == "|" and section == "ours" then
+          section = "ancestor"
+          current.ancestor_label = label
+        elseif kind == "=" and (section == "ours" or section == "ancestor") and label == "" then
+          section = "theirs"
+        elseif kind == ">" and section == "theirs" then
+          current.theirs_label = label
+          table.insert(current.raw, line)
+          table.insert(conflicts, current)
+          table.insert(chunks, { type = "conflict", index = #conflicts })
+          current, section = nil, nil
+        else
+          return malformed(i)
+        end
       end
-      i = i + 1
+      if current then table.insert(current.raw, line) end
+    elseif current then
+      table.insert(current[section], line)
+      table.insert(current.raw, line)
+    elseif #chunks > 0 and chunks[#chunks].type == "text" then
+      table.insert(chunks[#chunks].lines, line)
+    else
+      table.insert(chunks, { type = "text", lines = { line } })
     end
   end
+  if current then return malformed(#lines) end
 
   return conflicts, chunks
 end
@@ -131,12 +130,8 @@ local function build_result()
           vim.list_extend(result, conflict.resolution)
         end
       else
-        -- Unresolved conflict - keep markers
-        table.insert(result, "<<<<<<< HEAD")
-        vim.list_extend(result, conflict.ours)
-        table.insert(result, "=======")
-        vim.list_extend(result, conflict.theirs)
-        table.insert(result, ">>>>>>> MERGE_HEAD")
+        -- Preserve Git's labels and optional ancestor section until resolved.
+        vim.list_extend(result, conflict.raw)
       end
     end
   end
@@ -145,6 +140,15 @@ local function build_result()
 end
 
 -- Create the UI buffers and windows
+local function side_title(side, conflict)
+  local role = side == "ours" and "Local (ours)" or "Incoming (theirs)"
+  if state.expected.operation == "rebase" then
+    role = side == "ours" and "Rebased base (ours)" or "Replayed commit (theirs)"
+  end
+  local label = conflict[side .. "_label"]
+  return " " .. role .. (label and label ~= "" and (": " .. label) or "") .. " "
+end
+
 local function create_ui()
   -- Create buffers
   state.buffers.ours = vim.api.nvim_create_buf(false, true)
@@ -175,7 +179,7 @@ local function create_ui()
     col = 0,
     style = "minimal",
     border = "rounded",
-    title = " Incoming (Theirs) ",
+    title = side_title("theirs", state.conflicts[state.current_conflict_idx]),
     title_pos = "center",
     zindex = 200,
   })
@@ -203,7 +207,7 @@ local function create_ui()
     col = (pane_width + 2) * 2,
     style = "minimal",
     border = "rounded",
-    title = " Local (Ours) ",
+    title = side_title("ours", state.conflicts[state.current_conflict_idx]),
     title_pos = "center",
     zindex = 200,
   })
@@ -241,6 +245,9 @@ local function render()
   local current = state.conflicts[state.current_conflict_idx]
   if not current then
     return
+  end
+  for _, side in ipairs({ "ours", "theirs" }) do
+    vim.api.nvim_win_set_config(state.windows[side], { title = side_title(side, current) })
   end
 
   -- Update "ours" (local) buffer - show current conflict only
@@ -287,7 +294,7 @@ local function render()
         end
       else
         -- Unresolved: markers + ours + separator + theirs + end marker
-        current_line = current_line + 1 + #prev_conflict.ours + 1 + #prev_conflict.theirs + 1
+        current_line = current_line + #prev_conflict.raw
       end
     end
   end
@@ -314,6 +321,7 @@ local function render()
       resolved_count,
       total
     ),
+    "Operation: " .. (state.expected.operation or "conflict") .. " · " .. side_title("ours", current) .. " · " .. side_title("theirs", current),
   }
 
   vim.api.nvim_set_option_value("modifiable", true, { buf = state.buffers.info })
@@ -361,7 +369,7 @@ local function accept_all_ours()
     conflict.resolution = "ours"
   end
   render()
-  vim.notify("Accepted all local changes", vim.log.levels.INFO)
+  vim.notify("Accepted all ours changes", vim.log.levels.INFO)
 end
 
 local function accept_all_theirs()
@@ -370,7 +378,7 @@ local function accept_all_theirs()
     conflict.resolution = "theirs"
   end
   render()
-  vim.notify("Accepted all incoming changes", vim.log.levels.INFO)
+  vim.notify("Accepted all theirs changes", vim.log.levels.INFO)
 end
 
 -- Check if we're in a rebase state
@@ -547,10 +555,10 @@ local function setup_keymaps()
   for _, buf in ipairs(bufs) do
     vim.keymap.set("n", "j", next_conflict, { buffer = buf, silent = true, desc = "Next conflict" })
     vim.keymap.set("n", "k", prev_conflict, { buffer = buf, silent = true, desc = "Previous conflict" })
-    vim.keymap.set("n", "l", accept_ours, { buffer = buf, silent = true, desc = "Accept local (ours)" })
-    vim.keymap.set("n", "h", accept_theirs, { buffer = buf, silent = true, desc = "Accept incoming (theirs)" })
-    vim.keymap.set("n", "a", accept_all_ours, { buffer = buf, silent = true, desc = "Accept all local" })
-    vim.keymap.set("n", "A", accept_all_theirs, { buffer = buf, silent = true, desc = "Accept all incoming" })
+    vim.keymap.set("n", "l", accept_ours, { buffer = buf, silent = true, desc = "Accept ours (see pane label)" })
+    vim.keymap.set("n", "h", accept_theirs, { buffer = buf, silent = true, desc = "Accept theirs (see pane label)" })
+    vim.keymap.set("n", "a", accept_all_ours, { buffer = buf, silent = true, desc = "Accept all ours" })
+    vim.keymap.set("n", "A", accept_all_theirs, { buffer = buf, silent = true, desc = "Accept all theirs" })
     vim.keymap.set("n", "f", select_conflicted_file, { buffer = buf, silent = true, desc = "Select conflicted file" })
     vim.keymap.set("n", "s", save_and_close, { buffer = buf, silent = true, desc = "Save and close" })
     vim.keymap.set("n", "q", M.close, { buffer = buf, silent = true, desc = "Quit without saving" })
@@ -567,6 +575,20 @@ function M.open(file_path)
 
   if file_path:sub(1, 1) ~= "/" then file_path = cwd .. "/" .. file_path end
 
+  local info, info_error = git.conflict_file_info(file_path)
+  if not info then
+    vim.notify(info_error, vim.log.levels.ERROR)
+    return
+  end
+  if info.delete_modify then
+    vim.notify("Delete/modify conflict is unsupported; resolve externally and stage explicitly. File remains unresolved", vim.log.levels.WARN)
+    return
+  end
+  if info.binary then
+    vim.notify("Binary conflict is unsupported; resolve externally and stage explicitly. File remains unresolved", vim.log.levels.WARN)
+    return
+  end
+
   -- Check if file exists
   local uv = vim.uv or vim.loop
   local stat = uv.fs_stat(file_path)
@@ -576,14 +598,15 @@ function M.open(file_path)
   end
 
   -- Parse conflicts
-  local conflicts, file_chunks = parse_conflicts(file_path)
+  local conflicts, file_chunks = parse_conflicts(file_path, info.marker_size)
   if not conflicts then
     vim.notify("Error parsing conflicts: " .. (file_chunks or "unknown error"), vim.log.levels.ERROR)
     return
   end
 
   if #conflicts == 0 then
-    vim.notify("No conflicts found in " .. file_path, vim.log.levels.INFO)
+    vim.notify(info.unmerged and ("Unmerged file has no supported conflict markers; resolve externally and stage explicitly. File remains unresolved: " .. file_path)
+      or ("No conflicts found in " .. file_path), info.unmerged and vim.log.levels.WARN or vim.log.levels.INFO)
     return
   end
 
