@@ -137,13 +137,17 @@ The remote deletion picker supports exactly one standard fetch mapping per confi
 
 ### Conflict resolver (`X`) key bindings
 
+The left pane shows **theirs**, the right pane shows **ours**, and the middle pane previews the resulting file. Pane titles retain Git's marker labels and the information panel names the active operation. During a merge, ours is the local side and theirs is the incoming side. During a rebase, **ours is the rebased base** (upstream plus commits already replayed) and **theirs is the commit currently being replayed**.
+
+Merge, diff3 and zdiff3 markers are supported, including `conflict-marker-size` attributes. The common ancestor in diff3/zdiff3 remains separate from both choices and appears only in unresolved result previews. Shared context moved outside zdiff3 markers stays in the result. Malformed markers, binary conflicts and delete/modify conflicts remain unresolved with a diagnostic; resolve those externally and stage the intended result explicitly.
+
 Key | Action
 --- | ---
 `j` / `k` | Next/previous conflict
-`l` | Accept local change (ours) for current conflict
-`h` | Accept incoming change (theirs) for current conflict
-`a` | Accept all local changes
-`A` | Accept all incoming changes
+`l` | Accept ours for current conflict (see pane label)
+`h` | Accept theirs for current conflict (see pane label)
+`a` | Accept ours for all conflicts
+`A` | Accept theirs for all conflicts
 `f` | Select a different conflicted file
 `s` | Save resolved file and stage it
 `q` / `<Esc>` | Quit resolver without saving

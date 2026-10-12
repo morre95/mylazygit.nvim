@@ -1850,6 +1850,30 @@ function M.mutate_async(action, fn, callback, opts)
 	if not ok then done(false, { tostring(err) }) end
 end
 
+-- Inspect resolver metadata in the captured worktree; never change the index.
+function M.conflict_file_info(file)
+	local index_ok, entries = system({ "--literal-pathspecs", "ls-files", "--unmerged", "--", file }, { silent = true })
+	if not index_ok then return nil, "Could not inspect unmerged index; file remains unresolved" end
+	local stages = {}
+	for _, entry in ipairs(entries) do
+		local stage = entry:match("^%d+ %x+ (%d)\t")
+		if stage then stages[tonumber(stage)] = true end
+	end
+	local ok, attributes = system({ "--literal-pathspecs", "check-attr", "conflict-marker-size", "binary", "diff", "merge", "--", file }, { silent = true })
+	if not ok then return nil, "Could not inspect conflict attributes; file remains unresolved" end
+	local values = {}
+	for _, attribute in ipairs(attributes) do
+		local name, value = attribute:match(": ([%w%-]+): ([^:]+)$")
+		if name then values[name] = value end
+	end
+	local configured = values["conflict-marker-size"] or ""
+	local width = configured:match("^%d+$") and tonumber(configured) or nil
+	if width and (width < 1 or width > 2147483647) then width = nil end
+	return { marker_size = width and width > 0 and width or 7, unmerged = next(stages) ~= nil,
+		delete_modify = next(stages) ~= nil and not (stages[2] and stages[3]),
+		binary = values.binary == "set" or values.diff == "unset" or values.merge == "unset" }
+end
+
 function M.resolve_conflict(file, lines, opts)
 	opts = opts or {}
 	opts.target = opts.target or { worktree = cwd, file = file }
