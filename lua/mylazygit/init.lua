@@ -13,7 +13,6 @@ local config = {
 	branch_fallback = "main",
 	merge_workflow = {
 		main_branch = "main",
-		rebase_args = {},
 	},
 	-- Published cleanup and gPF protect these branches, main and merge_workflow.main_branch.
 	protected_branches = {},
@@ -680,11 +679,8 @@ local function cleanup_protected()
 	return vim.list_extend({ config.merge_workflow.main_branch }, vim.deepcopy(config.protected_branches))
 end
 
-local function review_cleanup(operation, opts)
-	opts = opts or {}
-	opts.protected = cleanup_protected()
-	local target, err = git.resolve_cleanup_target(operation, opts)
-	if not target then notify(err, vim.log.levels.WARN); return end
+local function confirm_cleanup(target)
+	local operation = target.operation
 	local published = target.publication == "published"
 	local review = published and string.format(
 		"Rewrite published history with %s on %s?\nPublication: %s %s (%s)\nReviewed remote commit: %s\nLater gPF will lease this commit; ordinary push cannot publish the rewrite.",
@@ -695,6 +691,14 @@ local function review_cleanup(operation, opts)
 	if confirm(review, (published and "&Rewrite" or "&" .. operation) .. "\n&Cancel", 2) ~= 1 then notify("Cleanup cancelled"); return end
 	target.confirmed, target.rewrite_confirmed = true, published
 	return target
+end
+
+local function review_cleanup(operation, opts)
+	opts = opts or {}
+	opts.protected = cleanup_protected()
+	local target, err = git.resolve_cleanup_target(operation, opts)
+	if not target then notify(err, vim.log.levels.WARN); return end
+	return confirm_cleanup(target)
 end
 
 local function execute_cleanup(target, message)
@@ -1294,16 +1298,31 @@ local function merge_workflow()
 			notify(string.format("Branch %s no longer exists locally.", choice), vim.log.levels.WARN)
 			return
 		end
-		run_and_refresh(function()
-			return select(
-				1,
-				git.merge_workflow({
-					main_branch = main_branch,
-					feature_branch = choice,
-					rebase_args = workflow_cfg.rebase_args,
-				})
-			)
-		end, string.format("Workflow merged %s into %s", choice, main_branch))
+		local choices = { "Merge (preserve shared history)", "Rebase (review cleanup)", "Cancel" }
+		prompts.select(choices, { prompt = "Workflow integration choice" }, function(mode)
+			if not mode or mode == choices[3] then notify("Merge workflow cancelled"); return end
+			local ok, output, result = git.merge_workflow({
+				main_branch = main_branch, feature_branch = choice,
+				mode = mode == choices[2] and "rebase" or "merge",
+				rebase_args = workflow_cfg.rebase_args, protected = cleanup_protected(),
+				review_cleanup = function(target) return confirm_cleanup(target) ~= nil end,
+			})
+			local progress = result.workflow
+			local lines = vim.deepcopy(output or {})
+			if not ok then
+				table.insert(lines, "Completed: " .. (#progress.completed > 0 and table.concat(progress.completed, "; ") or "none"))
+				table.insert(lines, "Failed: " .. (progress.failed or result.status))
+				table.insert(lines, "Remaining: " .. (#progress.remaining > 0 and table.concat(progress.remaining, "; ") or "none"))
+				table.insert(lines, "Current branch: " .. (result.state.branch or "detached HEAD"))
+				table.insert(lines, result.state.operation and "Resolve conflicts with X, then recover with gx. Remaining workflow steps require a new explicit decision."
+					or "Inspect repository state and decide how to finish the remaining work.")
+			end
+			if progress.publication == "reviewed-rewrite" then
+				table.insert(lines, "Feature publication: after completing integration, switch to " .. choice .. " and use gPF with the pre-cleanup reviewed lease.")
+			else table.insert(lines, "Publication remains manual; after completing integration, use P on the branch to publish.") end
+			notify(table.concat(lines, "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
+			M.refresh()
+		end)
 	end)
 end
 
@@ -2034,7 +2053,7 @@ keymap_mappings = {
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Automated multi-step merge workflow:\n1. Checkout the main branch\n2. Pull main with rebase (if upstream exists)\n3. Checkout the feature branch\n4. Pull feature with rebase (if upstream exists)\n5. Rebase feature onto main\n6. Checkout main and merge the feature branch\n\nThis ensures a clean, up-to-date merge. Configure the main branch in setup() under merge_workflow.main_branch.",
+		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: private replay needs confirmation; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Publication is manual; remaining workflow steps never run automatically.",
 	},
 	{
 		lhs = "gbr",
