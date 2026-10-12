@@ -1737,7 +1737,7 @@ function M.repository_state()
 	local _, unstaged = system({ "diff", "--binary" }, { silent = true })
 	local _, status = system({ "status", "--porcelain" }, { silent = true })
 	local _, refs = system({ "for-each-ref", "--format=%(refname) %(objectname)", "refs" }, { silent = true })
-	local _, conflicts = system({ "diff", "--name-only", "--diff-filter=U" }, { silent = true })
+	local conflicts_ok, conflicts = system({ "diff", "--name-only", "--diff-filter=U" }, { silent = true })
 	local operation, operation_id
 	for _, entry in ipairs({ { "rebase-merge", "rebase" }, { "rebase-apply", "rebase" }, { "MERGE_HEAD", "merge" }, { "CHERRY_PICK_HEAD", "cherry-pick" }, { "REVERT_HEAD", "revert" }, { "sequencer", "sequencer" } }) do
 		local ok, paths = system({ "rev-parse", "--git-path", entry[1] }, { silent = true })
@@ -1746,7 +1746,7 @@ function M.repository_state()
 		if path and (vim.uv or vim.loop).fs_stat(path) then operation, operation_id = entry[2], operation_identity(path); break end
 	end
 	return { head = head_ok and head[1] or nil, branch = branch_ok and branch[1] or nil, index = table.concat(index, "\n"), status = status, unstaged = table.concat(unstaged, "\n"),
-		refs = refs, conflicts = conflicts, operation = operation, operation_id = operation_id, running = reservations[key] and reservations[key].action or nil }
+		refs = refs, conflicts = conflicts_ok and conflicts or {}, conflicts_known = conflicts_ok, operation = operation, operation_id = operation_id, running = reservations[key] and reservations[key].action or nil }
 end
 
 local function recovery(state)
@@ -1876,15 +1876,30 @@ end
 
 function M.resolve_conflict(file, lines, opts)
 	opts = opts or {}
+	local saved_content = false
 	opts.target = opts.target or { worktree = cwd, file = file }
-	return M.mutate("resolve_conflict", function()
+	local ok, output, result = M.mutate("resolve_conflict", function()
 		local path = file:sub(1, 1) == "/" and file or cwd .. "/" .. file
 		local physical = (vim.uv or vim.loop).fs_realpath(path)
 		if not physical or physical:sub(1, #key + 1) ~= key .. "/" then return false, { "Conflict file must belong to this worktree" } end
-		if opts.contents and not vim.deep_equal(vim.fn.readfile(path), opts.contents) then return false, { "Conflict file changed since opening; reopen it before saving" } end
-		if vim.fn.writefile(lines, path) ~= 0 then return false, { "Could not save conflict resolution" } end
-		return M.stage(path)
+		local info, info_error = M.conflict_file_info(path)
+		if not info then return false, { info_error } end
+		local content = type(lines) == "string" and lines or table.concat(lines, "\n")
+		local conflicts, parse_error = require("mylazygit.conflict_markers").parse(content, info.marker_size)
+		if not conflicts then return false, { parse_error } end
+		if #conflicts > 0 then return false, { "Conflict markers remain unresolved; choose every conflict before saving" } end
+		local exact = type(lines) == "string"
+		local original = opts.contents and (type(opts.contents) == "string" and table.concat(vim.fn.readfile(path, "b"), "\n") or vim.fn.readfile(path))
+		if opts.contents and not vim.deep_equal(original, opts.contents) then return false, { "Conflict file changed since opening; reopen it before saving" } end
+		local saved = vim.fn.writefile(exact and vim.split(lines, "\n", { plain = true }) or lines, path, exact and "b" or "")
+		if saved ~= 0 then return false, { "Could not save conflict resolution" } end
+		saved_content = true
+		local stage_ok, stage_output = system({ "--literal-pathspecs", "add", "--", path })
+		if not stage_ok then table.insert(stage_output, 1, "Resolution saved, but staging failed; retry saving after fixing the Git error") end
+		return stage_ok, stage_output
 	end, opts)
+	result.saved = saved_content
+	return ok, output, result
 end
 
 function M.recover(operation, action, callback, opts)

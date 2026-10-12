@@ -1483,9 +1483,12 @@ local function resolver_conflict(style, operation, sides)
   local alice = git.session(a)
   command(a, { 'config', 'merge.conflictStyle', style })
   assert(alice.switch_create('topic'))
-  vim.fn.writefile(sides and sides.theirs or { 'topic side' }, a .. '/file.txt'); assert(alice.stage('file.txt')); assert(alice.commit('Replay topic'))
+  local files = sides and sides.files or { 'file.txt' }
+  for _, file in ipairs(files) do vim.fn.writefile(sides and sides.theirs or { 'topic side' }, a .. '/' .. file) end
+  assert(alice.stage(files)); assert(alice.commit('Replay topic'))
   assert(alice.switch('main'))
-  vim.fn.writefile(sides and sides.ours or { 'main side' }, a .. '/file.txt'); assert(alice.stage('file.txt')); assert(alice.commit('Main'))
+  for _, file in ipairs(files) do vim.fn.writefile(sides and sides.ours or { 'main side' }, a .. '/' .. file) end
+  assert(alice.stage(files)); assert(alice.commit('Main'))
   if operation == 'rebase' then
     assert(alice.switch('topic'))
     local result = vim.system({ 'git', '-C', a, 'rebase', 'main' }, { text = true }):wait()
@@ -1503,6 +1506,177 @@ local function save_resolver_and_stop()
   vim.ui.select = original_select
   assert(completed, 'Saving opens the explicit stop/continue prompt')
 end
+local function file_bytes(path)
+  return table.concat(vim.fn.readfile(path, 'b'), '\n')
+end
+local function put_bytes(path, bytes)
+  assert(vim.fn.writefile(vim.split(bytes, '\n', { plain = true }), path, 'b') == 0)
+end
+test('conflict resolver preserves exact LF CRLF BOM and final newline bytes when saving a side', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  local cases = {
+    { source = '\239\187\191<<<<<<< HEAD\nmain side\n=======\ntopic side\n>>>>>>> topic\n', expected = '\239\187\191main side\n' },
+    { source = 'prefix\n<<<<<<< HEAD\nmain side\n||||||| base\ninitial\n=======\ntopic side\n>>>>>>> topic\nsuffix\n', expected = 'prefix\nmain side\nsuffix\n' },
+    { source = 'prefix\r\n<<<<<<< HEAD\r\nmain side\r\n||||||| base\r\ninitial\r\n=======\r\ntopic side\r\n>>>>>>> topic\r\nsuffix\r\n', expected = 'prefix\r\nmain side\r\nsuffix\r\n' },
+    { source = '\239\187\191prefix\n<<<<<<< HEAD\nmain side\n=======\ntopic side\n>>>>>>> topic\nsuffix', expected = '\239\187\191prefix\nmain side\nsuffix' },
+    { source = 'prefix\r\n<<<<<<< HEAD\r\nmain side\r\n=======\r\ntopic side\r\n>>>>>>> topic', expected = 'prefix\r\nmain side' },
+    { source = 'prefix\n<<<<<<< HEAD\nmain side\n=======\ntopic side\n>>>>>>> topic\nsuffix\r', expected = 'prefix\nmain side\nsuffix\r' },
+  }
+  for _, case in ipairs(cases) do
+    put_bytes(a .. '/file.txt', case.source)
+    resolver.open('file.txt', alice); action('l'); save_resolver_and_stop()
+    equal(file_bytes(a .. '/file.txt'), case.expected, 'Saved file preserves its original formatting')
+    local staged = vim.system({ 'git', '-C', a, 'show', ':file.txt' }):wait()
+    equal(staged.stdout, case.expected, 'Index contains exactly the chosen formatted result')
+  end
+  resolver.close()
+end)
+test('conflict resolver rejects stale content and formatting changes without overwriting or staging', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  local original = file_bytes(a .. '/file.txt')
+  local unmerged = command(a, { 'ls-files', '--unmerged' })
+  for _, changed in ipairs({ original .. 'external edit\n', original:sub(1, -2), (original:gsub('\n', '\r\n')) }) do
+    put_bytes(a .. '/file.txt', original)
+    resolver.open('file.txt', alice); action('a')
+    put_bytes(a .. '/file.txt', changed)
+    local before = #notifications
+    action('s')
+    equal(file_bytes(a .. '/file.txt'), changed, 'Edits made after loading survive save attempt')
+    equal(command(a, { 'ls-files', '--unmerged' }), unmerged, 'Stale choice never enters the index')
+    assert(table.concat(notifications, '\n', before + 1):find('changed since opening', 1, true), 'Stale file diagnostic explains reopening')
+    resolver.close()
+  end
+end)
+test('conflict resolver refuses saving unresolved choices even when a confirmation provider accepts', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  local original, unmerged = file_bytes(a .. '/file.txt'), command(a, { 'ls-files', '--unmerged' })
+  resolver.open('file.txt', alice)
+  local old_confirm, old_select = vim.fn.confirm, vim.ui.select
+  vim.fn.confirm = function() return 1 end
+  local prompt
+  vim.ui.select = function(_, _, cb) prompt = true; cb('Stop here') end
+  local before = #notifications
+  action('s'); vim.wait(100, function() return prompt end)
+  vim.fn.confirm, vim.ui.select = old_confirm, old_select
+  equal(file_bytes(a .. '/file.txt'), original, 'Unresolved content is not rewritten')
+  equal(command(a, { 'ls-files', '--unmerged' }), unmerged, 'Unresolved markers remain unmerged')
+  assert(not prompt, 'Incomplete resolution cannot offer operation completion')
+  assert(table.concat(notifications, '\n', before + 1):find('unresolved', 1, true), 'Save diagnostic asks for complete choices')
+  resolver.close()
+end)
+test('conflict resolver keeps a saved choice retryable after real staging failure', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  local unmerged = command(a, { 'ls-files', '--unmerged' })
+  resolver.open('file.txt', alice); action('l')
+  put_bytes(a .. '/.git/index.lock', '')
+  local before = #notifications
+  action('s')
+  equal(file_bytes(a .. '/file.txt'), 'main side\n', 'Chosen file is saved before Git tries staging')
+  equal(command(a, { 'ls-files', '--unmerged' }), unmerged, 'Failed stage keeps real unmerged entries')
+  assert(not table.concat(notifications, '\n', before + 1):find('Saved and staged', 1, true), 'Failed stage never announces resolution')
+  vim.fn.delete(a .. '/.git/index.lock')
+  save_resolver_and_stop()
+  equal(command(a, { 'show', ':file.txt' }), 'main side', 'Retry stages the saved choice')
+  equal(alice.repository_state().conflicts, {}, 'Successful retry clears conflict state')
+  resolver.close()
+end)
+test('conflict resolver rejects failed writes without staging or offering completion', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  local original, unmerged = file_bytes(a .. '/file.txt'), command(a, { 'ls-files', '--unmerged' })
+  for _, failure in ipairs({ function() return -1 end, function() error('disk unavailable') end }) do
+    resolver.open('file.txt', alice); action('a')
+    local old_write, old_select = vim.fn.writefile, vim.ui.select
+    local prompt
+    vim.fn.writefile = failure
+    vim.ui.select = function() prompt = true end
+    local before = #notifications
+    action('s'); vim.wait(100, function() return prompt end)
+    vim.fn.writefile, vim.ui.select = old_write, old_select
+    equal(file_bytes(a .. '/file.txt'), original, 'Failed writer leaves fixture content intact')
+    equal(command(a, { 'ls-files', '--unmerged' }), unmerged, 'Write failure never stages markers')
+    assert(not prompt, 'Failed write cannot offer completion')
+    assert(not table.concat(notifications, '\n', before + 1):find('Saved and staged', 1, true), 'Failed write never reports resolution')
+    resolver.close()
+  end
+end)
+test('conflict resolver reports remaining files and refreshes UI before offering merge completion', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'initial' }, a .. '/other.txt'); assert(alice.stage('other.txt')); assert(alice.commit('Second file'))
+  alice = resolver_conflict('diff3', 'merge', { files = { 'file.txt', 'other.txt' } })
+  local plugin, ui, resolver = require('mylazygit'), require('mylazygit.ui'), require('mylazygit.conflict')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local old_select, prompts, submit = vim.ui.select, {}
+  vim.ui.select = function(items, opts, cb) prompts[#prompts + 1] = { items = items, prompt = opts.prompt }; submit = cb end
+  resolver.open('file.txt', alice); action('l'); action('s')
+  assert(vim.wait(5000, function() return #prompts == 1 end))
+  equal(alice.repository_state().conflicts, { 'other.txt' }, 'Session reports exactly the remaining unmerged file')
+  equal(prompts[1].items, { 'Stop here', 'other.txt' }, 'Remaining picker offers the unresolved file')
+  assert(prompts[1].prompt:find('1 remaining', 1, true), 'Picker reports the exact remaining count')
+  assert(ui_text():find('UU other.txt', 1, true), 'Underlying UI refresh keeps remaining file unmerged')
+  assert(not ui_text():find('UU file.txt', 1, true), 'Underlying UI refresh removes the saved file conflict')
+  submit('other.txt'); action('h'); action('s')
+  assert(vim.wait(5000, function() return #prompts == 2 end))
+  equal(alice.repository_state().conflicts, {}, 'Both saved choices clear actual index conflicts')
+  equal(prompts[2].items, { 'Commit', 'Stop here' }, 'Completion offered only once all unmerged entries disappear')
+  submit('Stop here'); vim.ui.select = old_select
+  equal(command(a, { 'show', ':file.txt' }), 'main side', 'First file keeps its chosen side')
+  equal(command(a, { 'show', ':other.txt' }), 'topic side', 'Second file keeps its independent side')
+  resolver.close(); ui.close()
+end)
+test('conflict resolver never offers completion when remaining unmerged inspection fails', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  resolver.open('file.txt', alice); action('a')
+  local old_system, old_select = vim.fn.systemlist, vim.ui.select
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'diff' and cmd[5] == '--name-only' and cmd[6] == '--diff-filter=U' then
+      old_system({ 'git', '-C', a, 'invalid-inspection-command' }); return {}
+    end
+    return old_system(cmd)
+  end
+  local prompt
+  vim.ui.select = function() prompt = true end
+  local before = #notifications
+  action('s'); vim.wait(200, function() return prompt end)
+  vim.fn.systemlist, vim.ui.select = old_system, old_select
+  assert(not prompt, 'Unknown index state cannot offer merge completion')
+  assert(table.concat(notifications, '\n', before + 1):find('inspect', 1, true), 'Inspection failure has a diagnostic')
+  equal(alice.repository_state().operation, 'merge', 'Inspection failure never continues the operation')
+  resolver.close()
+end)
+test('conflict resolution session rejects unresolved or malformed output before writing and staging', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local original, unmerged = file_bytes(a .. '/file.txt'), command(a, { 'ls-files', '--unmerged' })
+  local candidates = { original, original:gsub('>>>>>>>[^\n]*\n', ''), (original:gsub('|||||||', '||||||')) }
+  for _, content in ipairs(candidates) do
+    local ok, _, result = alice.resolve_conflict('file.txt', content, { contents = original })
+    equal(ok, false, 'Public session refuses incomplete marker output')
+    equal(result.status, 'failed', 'Invalid output cannot be reported as successful resolution')
+    equal(file_bytes(a .. '/file.txt'), original, 'Invalid output is never written')
+    equal(command(a, { 'ls-files', '--unmerged' }), unmerged, 'Invalid output never replaces index conflict stages')
+  end
+end)
+test('conflict resolver stages the selected literal filename without staging matching unrelated files', function()
+  local alice = git.session(a)
+  local file = 'star*.txt'
+  put_bytes(a .. '/' .. file, 'initial\n'); command(a, { '--literal-pathspecs', 'add', '--', file }); assert(alice.commit('Literal file'))
+  assert(alice.switch_create('topic'))
+  put_bytes(a .. '/' .. file, 'topic side\n'); command(a, { '--literal-pathspecs', 'add', '--', file }); assert(alice.commit('Topic literal'))
+  assert(alice.switch('main'))
+  put_bytes(a .. '/' .. file, 'main side\n'); command(a, { '--literal-pathspecs', 'add', '--', file }); assert(alice.commit('Main literal'))
+  assert(not alice.merge('topic'))
+  put_bytes(a .. '/star-other.txt', 'unrelated\n')
+  local resolver = require('mylazygit.conflict')
+  resolver.open(file, alice); action('l'); save_resolver_and_stop()
+  equal(command(a, { 'diff', '--cached', '--name-only' }), '', 'Chosen ours equals HEAD and unrelated file is not staged')
+  equal(command(a, { 'ls-files', '--others', '--exclude-standard' }), 'star-other.txt', 'Unrelated matching filename stays untracked')
+  resolver.close()
+end)
 test('conflict resolver diff3 ours choice excludes ancestor and stages the chosen side', function()
   local alice = resolver_conflict('diff3', 'merge')
   local resolver = require('mylazygit.conflict')

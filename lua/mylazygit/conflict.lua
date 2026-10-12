@@ -3,7 +3,9 @@ local resolver = {}
 local active_resolver
 
 local function conflicted_files(git)
-  return git.diff({ "--name-only", "--diff-filter=U" })
+  local current = git.repository_state()
+  if not current.conflicts_known then return nil, "Could not inspect remaining unmerged entries; inspect the repository and retry with [X]" end
+  return current.conflicts
 end
 
 local function create_resolver(git)
@@ -12,9 +14,6 @@ local cwd = git.worktree()
 
 local function select(items, opts, callback)
   return git.without_mutation(vim.ui.select, items, opts, git.user_callback(callback))
-end
-local function confirm(...)
-  return git.without_mutation(vim.fn.confirm, ...)
 end
 
 -- State for the conflict resolver
@@ -39,67 +38,11 @@ local function parse_conflicts(file_path, marker_size)
     uv.fs_close(fd)
     return nil, "Could not stat file"
   end
-  local content = uv.fs_read(fd, stat.size, 0) or ""
+  local content, read_error = uv.fs_read(fd, stat.size, 0)
   uv.fs_close(fd)
-  if content:find("\0", 1, true) then
-    return nil, "Binary conflict is unsupported; resolve externally and stage explicitly. File remains unresolved"
-  end
-
-  local lines = vim.split(content, "\n", { plain = true })
-  local conflicts, chunks = {}, {}
-  local current, section, marker_width
-  local function marker(line)
-    local text = line:gsub("\r$", "")
-    local kind = text:sub(1, 1)
-    if kind ~= "<" and kind ~= "|" and kind ~= "=" and kind ~= ">" then return end
-    local run, label = text:match("^(" .. kind .. "+)(.*)$")
-    -- Shortened marker runs must not become selectable side content. Preserve
-    -- ordinary one/two-character source operators when markers are wider.
-    local minimum = math.min(3, math.max(1, marker_size - 1))
-    if not run or #run < minimum then return end
-    return kind, #run, vim.trim(label), label == "" or label:match("^%s") ~= nil
-  end
-  local function malformed(i)
-    return nil, "Malformed conflict markers at line " .. i .. "; file remains unresolved"
-  end
-  for i, line in ipairs(lines) do
-    local kind, width, label, valid_label = marker(line)
-    if kind then
-      if not valid_label then return malformed(i) end
-      if not current then
-        if kind ~= "<" or width ~= marker_size then return malformed(i) end
-        current = { ours = {}, ancestor = {}, theirs = {}, raw = {}, resolved = false, ours_label = label }
-        marker_width, section = width, "ours"
-      else
-        if width ~= marker_width then return malformed(i) end
-        if kind == "|" and section == "ours" then
-          section = "ancestor"
-          current.ancestor_label = label
-        elseif kind == "=" and (section == "ours" or section == "ancestor") and label == "" then
-          section = "theirs"
-        elseif kind == ">" and section == "theirs" then
-          current.theirs_label = label
-          table.insert(current.raw, line)
-          table.insert(conflicts, current)
-          table.insert(chunks, { type = "conflict", index = #conflicts })
-          current, section = nil, nil
-        else
-          return malformed(i)
-        end
-      end
-      if current then table.insert(current.raw, line) end
-    elseif current then
-      table.insert(current[section], line)
-      table.insert(current.raw, line)
-    elseif #chunks > 0 and chunks[#chunks].type == "text" then
-      table.insert(chunks[#chunks].lines, line)
-    else
-      table.insert(chunks, { type = "text", lines = { line } })
-    end
-  end
-  if current then return malformed(#lines) end
-
-  return conflicts, chunks
+  if not content or #content ~= stat.size then return nil, "Could not read complete file: " .. (read_error or "short read") end
+  local conflicts, chunks = require("mylazygit.conflict_markers").parse(content, marker_size)
+  return conflicts, chunks, content
 end
 
 -- Build the result with resolved conflicts
@@ -136,6 +79,7 @@ local function build_result()
     end
   end
 
+  if state.original_contents:sub(1, 3) == "\239\187\191" then result[1] = "\239\187\191" .. (result[1] or "") end
   return result
 end
 
@@ -317,7 +261,7 @@ local function render()
   local info_lines = {
     string.format("Conflict %d/%d %s � File: %s", state.current_conflict_idx, total, status, state.file_path),
     string.format(
-      "Resolved: %d/%d � [l]ours [h]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [f]iles [s]ave [q]uit",
+      "Resolved: %d/%d � [l]ours [h]theirs [j/k]navigate [a]ll-ours [A]ll-theirs [f]iles [s]ave when complete [q]uit",
       resolved_count,
       total
     ),
@@ -410,6 +354,14 @@ end
 
 local function prompt_post_resolve(in_rebase, in_merge)
   local expected = git.repository_state()
+  if not expected.conflicts_known then
+    vim.notify("Could not inspect remaining unmerged entries; inspect the repository and retry with [X]", vim.log.levels.WARN)
+    return
+  end
+  if #expected.conflicts > 0 then
+    vim.notify(string.format("%d unmerged file(s) remain; resume resolution with [X]", #expected.conflicts), vim.log.levels.WARN)
+    return
+  end
   if in_rebase then
     select({ "Continue", "Stop here" }, {
       prompt = "File resolved and staged. Continue rebase?",
@@ -442,7 +394,8 @@ local function prompt_post_resolve(in_rebase, in_merge)
 end
 
 local function select_conflicted_file()
-  local conflicted_files = M.get_conflicted_files()
+  local conflicted_files, inspection_error = M.get_conflicted_files()
+  if not conflicted_files then vim.notify(inspection_error, vim.log.levels.WARN); return end
   if vim.tbl_isempty(conflicted_files) then
     vim.notify("No conflicted files found", vim.log.levels.INFO)
     return
@@ -466,7 +419,8 @@ local function select_conflicted_file()
 end
 
 local function prompt_next_conflicted_file(in_rebase, in_merge)
-  local conflicted_files = M.get_conflicted_files()
+  local conflicted_files, inspection_error = M.get_conflicted_files()
+  if not conflicted_files then vim.notify(inspection_error, vim.log.levels.WARN); return end
   if vim.tbl_isempty(conflicted_files) then
     prompt_post_resolve(in_rebase, in_merge)
     return
@@ -497,18 +451,20 @@ local function save_and_close()
   end
 
   if unresolved > 0 then
-    local choice =
-        confirm(string.format("%d conflict(s) unresolved. Save anyway?", unresolved), "&Yes\n&No", 2)
-    if choice ~= 1 then
-      return
-    end
+    vim.notify(string.format("%d conflict(s) unresolved; choose a side for every conflict before saving", unresolved), vim.log.levels.WARN)
+    return
   end
 
   -- Build final content
-  local final_lines = build_result()
+  local content = table.concat(build_result(), "\n")
+  local last_chunk = state.file_chunks[#state.file_chunks]
+  if state.original_contents:sub(-1) ~= "\n" and last_chunk and last_chunk.type == "conflict" then
+    content = content:gsub("\r$", "")
+  end
 
-  local stage_ok, output = git.resolve_conflict(state.file_path, final_lines, { contents = state.original_contents, expected = state.expected })
+  local stage_ok, output, result = git.resolve_conflict(state.file_path, content, { contents = state.original_contents, expected = state.expected })
   if not stage_ok then
+    if result.saved then state.original_contents, state.expected = content, result.state end
     vim.notify(table.concat(output, "\n"), vim.log.levels.WARN)
     return
   end
@@ -560,7 +516,7 @@ local function setup_keymaps()
     vim.keymap.set("n", "a", accept_all_ours, { buffer = buf, silent = true, desc = "Accept all ours" })
     vim.keymap.set("n", "A", accept_all_theirs, { buffer = buf, silent = true, desc = "Accept all theirs" })
     vim.keymap.set("n", "f", select_conflicted_file, { buffer = buf, silent = true, desc = "Select conflicted file" })
-    vim.keymap.set("n", "s", save_and_close, { buffer = buf, silent = true, desc = "Save and close" })
+    vim.keymap.set("n", "s", save_and_close, { buffer = buf, silent = true, desc = "Save complete resolution and stage" })
     vim.keymap.set("n", "q", M.close, { buffer = buf, silent = true, desc = "Quit without saving" })
     vim.keymap.set("n", "<Esc>", M.close, { buffer = buf, silent = true, desc = "Quit without saving" })
   end
@@ -598,7 +554,7 @@ function M.open(file_path)
   end
 
   -- Parse conflicts
-  local conflicts, file_chunks = parse_conflicts(file_path, info.marker_size)
+  local conflicts, file_chunks, original_contents = parse_conflicts(file_path, info.marker_size)
   if not conflicts then
     vim.notify("Error parsing conflicts: " .. (file_chunks or "unknown error"), vim.log.levels.ERROR)
     return
@@ -612,7 +568,7 @@ function M.open(file_path)
 
   -- Set up state
   state.file_path = file_path
-  state.original_contents = vim.fn.readfile(file_path)
+  state.original_contents = original_contents
   state.expected = git.repository_state()
   state.conflicts = conflicts
   state.file_chunks = file_chunks
