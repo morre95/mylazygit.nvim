@@ -529,10 +529,7 @@ end
 local function run_async_and_refresh(async_fn, success_msg)
 	async_fn(function(ok, output, result)
 		if result and result.workflow then
-			local lines = vim.deepcopy(output or {})
-			table.insert(lines, "Current branch: " .. (result.state.branch or "detached HEAD"))
-			table.insert(lines, "Index: " .. (#result.state.conflicts > 0 and (#result.state.conflicts .. " unmerged file(s)") or (result.state.index ~= "" and "staged changes" or "clean")))
-			table.insert(lines, "Remaining: " .. (#result.workflow.remaining > 0 and table.concat(result.workflow.remaining, "; ") or "none"))
+			local lines = helpers.recovery_lines(output, result)
 			notify(table.concat(lines, "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
 		elseif ok and success_msg then
 			notify(success_msg)

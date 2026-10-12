@@ -1939,9 +1939,9 @@ function M.recover(operation, action, callback, opts)
 		if not allowed or not vim.tbl_contains({ "merge", "rebase", "cherry-pick", "revert" }, operation) then done(false, { "Unsupported recovery action" }); return end
 		local plan = workflows[key]
 		local resumable = plan and plan.progress.status == "paused"
-		local valid = resumable and plan.worktree == key and plan.pause.head == current.head and plan.pause.branch == current.branch
+		local belongs_to_plan = resumable and plan.worktree == key and plan.pause.head == current.head and plan.pause.branch == current.branch
 			and plan.pause.operation == current.operation and plan.pause.operation_id == current.operation_id
-			and vim.deep_equal(plan.pause.refs, current.refs) and vim.deep_equal(plan.mappings, plan.mapping())
+		local valid = belongs_to_plan and vim.deep_equal(plan.pause.refs, current.refs) and vim.deep_equal(plan.mappings, plan.mapping())
 		if action == "continue" and (not current.conflicts_known or #current.conflicts > 0) then
 			done(false, { "Resolve and stage all conflicts before continuing; unmerged index inspection must succeed." }); return
 		end
@@ -1964,11 +1964,11 @@ function M.recover(operation, action, callback, opts)
 					and ((after.operation and after.branch == current.branch) or (not after.operation and after.branch == (current.branch or plan.feature_ref)))
 					and (after.operation or (after.conflicts_known and #after.conflicts == 0 and #after.status == 0))
 				if resumable then
-					if ok and not after.operation and action ~= "abort" then
+					if belongs_to_plan and ok and not after.operation and action ~= "abort" then
 						table.insert(plan.progress.completed, plan.progress.failed)
 						plan.progress.failed = nil
 					end
-					if action == "abort" and ok then
+					if belongs_to_plan and action == "abort" and ok then
 						plan.progress.status = "aborted"
 						table.insert(output, "Workflow aborted; completed synchronization remains intact. Publication remains manual.")
 					elseif not valid then

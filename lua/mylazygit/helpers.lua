@@ -1,5 +1,20 @@
 local M = {}
 
+-- Shared presentation for recovery from the main UI and conflict resolver.
+function M.recovery_lines(output, result)
+	local lines = vim.deepcopy(output or {})
+	local state, progress = result.state, result.workflow
+	local index = "unknown (unmerged inspection failed)"
+	if state.conflicts_known then
+		index = #state.conflicts > 0 and (#state.conflicts .. " unmerged file(s)")
+			or (state.index ~= "" and "staged changes" or "clean")
+	end
+	table.insert(lines, "Current branch: " .. (state.branch or "detached HEAD"))
+	table.insert(lines, "Index: " .. index)
+	table.insert(lines, "Remaining: " .. (#progress.remaining > 0 and table.concat(progress.remaining, "; ") or "none"))
+	return lines
+end
+
 function M.centered_input(opts, on_confirm)
 	opts = opts or {}
 	local prompt = (opts.prompt or "Input") .. ": "

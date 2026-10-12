@@ -1,4 +1,5 @@
 local git_module = require("mylazygit.git")
+local helpers = require("mylazygit.helpers")
 local resolver = {}
 local active_resolver
 
@@ -348,9 +349,7 @@ end
 local function continue_operation(operation, expected, on_success, on_failure)
   git.recover(operation, "continue", function(ok, output, result)
     if result.workflow then
-      vim.notify(table.concat(output or {}, "\n") .. "\nCurrent branch: " .. (result.state.branch or "detached HEAD")
-        .. "\nIndex: " .. (#result.state.conflicts > 0 and (#result.state.conflicts .. " unmerged file(s)") or (result.state.index ~= "" and "staged changes" or "clean"))
-        .. "\nRemaining: " .. (#result.workflow.remaining > 0 and table.concat(result.workflow.remaining, "; ") or "none"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
+      vim.notify(table.concat(helpers.recovery_lines(output, result), "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
     end
     if ok then if on_success then on_success() end
     elseif on_failure then on_failure(output) end
