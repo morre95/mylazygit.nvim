@@ -1495,6 +1495,14 @@ local function resolver_conflict(style, operation, sides)
   end
   return alice
 end
+local function save_resolver_and_stop()
+  local original_select, stopped = vim.ui.select, false
+  vim.ui.select = function(_, _, cb) stopped = true; cb('Stop here') end
+  action('s')
+  local completed = vim.wait(5000, function() return stopped end)
+  vim.ui.select = original_select
+  assert(completed, 'Saving opens the explicit stop/continue prompt')
+end
 test('conflict resolver diff3 ours choice excludes ancestor and stages the chosen side', function()
   local alice = resolver_conflict('diff3', 'merge')
   local resolver = require('mylazygit.conflict')
@@ -1504,13 +1512,11 @@ test('conflict resolver diff3 ours choice excludes ancestor and stages the chose
   equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), original, 'Unresolved preview preserves Git markers and ancestor')
   action('l')
   equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), { 'main side', '' }, 'Choosing ours excludes ancestor markers and contents')
-  local original_select = vim.ui.select
-  vim.ui.select = function(_, _, cb) cb('Stop here') end
-  action('s'); vim.wait(20)
+  save_resolver_and_stop()
   equal(command(a, { 'show', ':file.txt' }), 'main side', 'Index contains only ours')
   equal(alice.repository_state().conflicts, {}, 'Saved side removes the unmerged session entry')
   equal(alice.repository_state().operation, 'merge', 'Resolution leaves operation available for recovery')
-  vim.ui.select = original_select; resolver.close()
+  resolver.close()
 end)
 test('conflict resolver rebase names the rebased base and replayed commit with Git marker labels', function()
   local alice = resolver_conflict('diff3', 'rebase')
@@ -1526,13 +1532,11 @@ test('conflict resolver rebase names the rebased base and replayed commit with G
   assert(ui_text():find('Operation: rebase', 1, true), 'Active operation is visible')
   action('h')
   equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), { 'topic side', '' }, 'Theirs selects the replayed commit without ancestor')
-  local original_select = vim.ui.select
-  vim.ui.select = function(_, _, cb) cb('Stop here') end
-  action('s'); vim.wait(20)
+  save_resolver_and_stop()
   equal(command(a, { 'show', ':file.txt' }), 'topic side', 'Index holds replayed choice')
   equal(alice.repository_state().conflicts, {}, 'Session shows resolved rebase file')
   equal(alice.repository_state().operation, 'rebase', 'Choosing a side does not continue rebase')
-  vim.ui.select = original_select; resolver.close()
+  resolver.close()
 end)
 test('conflict resolver refuses truncated markers and leaves the real merge unresolved', function()
   local alice = resolver_conflict('diff3', 'merge')
@@ -1569,6 +1573,55 @@ test('conflict resolver rejects malformed nested duplicate and mismatched marker
     resolver.close()
   end
 end)
+test('conflict resolver refuses shortened marker sections while preserving ordinary source operators', function()
+  local source = { 'main side', '| bitwise', '|| conditional', '==', '<< shift', '>> shift' }
+  local alice = resolver_conflict('diff3', 'merge', { ours = source, theirs = { 'topic side' } })
+  local resolver = require('mylazygit.conflict')
+  local original = vim.fn.readfile(a .. '/file.txt')
+  for _, kind in ipairs({ '|', '=', '>', '<' }) do
+    for width = 3, 6 do
+      local contents = vim.deepcopy(original)
+      for i, line in ipairs(contents) do
+        if line:sub(1, 7) == string.rep(kind, 7) then
+          contents[i] = string.rep(kind, width) .. line:sub(8)
+        end
+      end
+      vim.fn.writefile(contents, a .. '/file.txt')
+      local before, windows = alice.repository_state(), #vim.api.nvim_list_wins()
+      resolver.open('file.txt', alice)
+      equal(#vim.api.nvim_list_wins(), windows, 'Shortened ' .. kind .. ' section exposes no saveable choices')
+      assert(notifications[#notifications]:find('Malformed conflict markers', 1, true), 'Shortened markers are explained')
+      equal(alice.repository_state(), before, 'Shortened marker sections preserve the unmerged index and content')
+      resolver.close()
+    end
+  end
+  vim.fn.writefile(original, a .. '/file.txt')
+  resolver.open('file.txt', alice); action('l')
+  equal(vim.api.nvim_buf_get_lines(0, 0, #source, false), source, 'Ordinary one/two-character source operators remain selectable')
+  save_resolver_and_stop()
+  equal(command(a, { 'show', ':file.txt' }), table.concat(source, '\n'), 'Valid source operators are saved without ancestor contamination')
+  equal(alice.repository_state().conflicts, {}, 'Valid source still resolves normally')
+  resolver.close()
+end)
+test('conflict resolver refuses shortened ancestor markers with small configured marker widths', function()
+  local alice = resolver_conflict('diff3', 'merge')
+  local resolver = require('mylazygit.conflict')
+  for _, width in ipairs({ 3, 2 }) do
+    vim.fn.writefile({ 'file.txt conflict-marker-size=' .. width }, a .. '/.gitattributes')
+    command(a, { 'checkout', '--conflict=diff3', '--', 'file.txt' })
+    local contents = vim.fn.readfile(a .. '/file.txt')
+    for i, line in ipairs(contents) do
+      if line:sub(1, width) == string.rep('|', width) then contents[i] = line:sub(2) end
+    end
+    vim.fn.writefile(contents, a .. '/file.txt')
+    local before, windows = alice.repository_state(), #vim.api.nvim_list_wins()
+    resolver.open('file.txt', alice)
+    equal(#vim.api.nvim_list_wins(), windows, 'Shortened custom ancestor exposes no saveable choices')
+    assert(notifications[#notifications]:find('Malformed conflict markers', 1, true), 'Shortened custom markers are explained')
+    equal(alice.repository_state(), before, 'Custom shortened ancestor remains unmerged')
+    resolver.close()
+  end
+end)
 test('conflict resolver zdiff3 keeps shared context and honors custom marker widths when accepting all theirs', function()
   command(a, { 'config', 'core.quotePath', 'true' })
   vim.fn.writefile({ 'file.txt conflict-marker-size=3' }, a .. '/.gitattributes')
@@ -1581,12 +1634,10 @@ test('conflict resolver zdiff3 keeps shared context and honors custom marker wid
   resolver.open('file.txt', alice)
   action('A')
   equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), { 'shared start', 'topic side', 'shared end', '' }, 'Zdiff3 context remains outside selected side')
-  local original_select = vim.ui.select
-  vim.ui.select = function(_, _, cb) cb('Stop here') end
-  action('s'); vim.wait(20)
+  save_resolver_and_stop()
   equal(command(a, { 'show', ':file.txt' }), 'shared start\ntopic side\nshared end', 'Index has theirs with shared context and no ancestor')
   equal(alice.repository_state().conflicts, {}, 'Zdiff3 file is resolved in session data')
-  vim.ui.select = original_select; resolver.close()
+  resolver.close()
 end)
 test('conflict resolver explains binary conflicts and preserves unresolved content and index', function()
   vim.fn.writefile({ 'initial\nbinary' }, a .. '/file.txt')

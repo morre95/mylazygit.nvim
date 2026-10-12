@@ -53,7 +53,10 @@ local function parse_conflicts(file_path, marker_size)
     local kind = text:sub(1, 1)
     if kind ~= "<" and kind ~= "|" and kind ~= "=" and kind ~= ">" then return end
     local run, label = text:match("^(" .. kind .. "+)(.*)$")
-    if not run or #run < math.min(7, marker_size) then return end
+    -- Shortened marker runs must not become selectable side content. Preserve
+    -- ordinary one/two-character source operators when markers are wider.
+    local minimum = math.min(3, math.max(1, marker_size - 1))
+    if not run or #run < minimum then return end
     return kind, #run, vim.trim(label), label == "" or label:match("^%s") ~= nil
   end
   local function malformed(i)
