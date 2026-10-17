@@ -701,6 +701,66 @@ local function ui_text()
   end
   return table.concat(lines, '\n')
 end
+test('Space checks out the cursor branch in Local Branches and keeps staging scoped to Worktree', function()
+  local alice, bob = git.session(a), git.session(b)
+  command(a, { 'branch', 'feature/deep/task' })
+  vim.fn.writefile({ 'pending' }, a .. '/pending.txt')
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  ui.bottom_view_set('local_branches'); ui.focus('diff')
+  local function select_branch(name)
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    for line, text in ipairs(lines) do
+      if vim.trim(text:gsub('^%*', '')) == name then
+        vim.api.nvim_win_set_cursor(0, { line, 0 }); return
+      end
+    end
+    error('Missing branch row ' .. name)
+  end
+  select_branch('feature/deep/task')
+  equal(alice.current_branch(), 'main', 'Moving the cursor only previews a branch')
+  vim.api.nvim_set_current_dir(b)
+  action(' ')
+  equal(alice.current_branch(), 'feature/deep/task', 'Space checks out the exact cursor branch in the captured repository')
+  equal(bob.current_branch(), 'main', 'Changed editor cwd does not redirect checkout')
+  assert(ui_text():find('Branch: feature/deep/task', 1, true), 'Header refreshes after checkout')
+  assert(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n'):find('* feature/deep/task', 1, true), 'Checked-out branch marker refreshes')
+  action(' ')
+  equal(alice.current_branch(), 'feature/deep/task', 'Space on the current branch is harmless')
+  select_branch('main'); action(' ')
+  equal(alice.current_branch(), 'main', 'Space can switch back')
+  for _, view in ipairs({ 'remote_branches', 'diff_preview' }) do
+    ui.bottom_view_set(view); action(' ')
+    equal(alice.current_branch(), 'main', 'Space in ' .. view .. ' does not switch branches')
+    equal(alice.diff({ '--cached', '--name-only' }), {}, 'Space in ' .. view .. ' does not stage a remembered file')
+  end
+  ui.focus('worktree'); action(' ')
+  equal(alice.diff({ '--cached', '--name-only' }), { 'pending.txt' }, 'Space still stages the selected worktree file')
+  action(' ')
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'Space still unstages the selected worktree file')
+  ui.close()
+end)
+test('Space checkout refuses to overwrite local changes and refreshes the actual branch', function()
+  local alice = git.session(a)
+  assert(alice.switch_create('topic'))
+  vim.fn.writefile({ 'topic contents' }, a .. '/file.txt'); assert(alice.stage('file.txt')); assert(alice.commit('Topic'))
+  assert(alice.switch('main'))
+  vim.fn.writefile({ 'local edits' }, a .. '/file.txt')
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  ui.bottom_view_set('local_branches'); ui.focus('diff')
+  for line, text in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+    if vim.trim(text) == 'topic' then vim.api.nvim_win_set_cursor(0, { line, 0 }); break end
+  end
+  local start = #notifications
+  action(' ')
+  equal(alice.current_branch(), 'main', 'Refused checkout leaves the current branch intact')
+  equal(vim.fn.readfile(a .. '/file.txt'), { 'local edits' }, 'Refused checkout preserves local work')
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'Branch checkout never stages local edits')
+  assert(ui_text():find('Branch: main', 1, true), 'Header shows the actual branch after failure')
+  assert(table.concat(vim.list_slice(notifications, start + 1), '\n'):find('would be overwritten', 1, true), 'Git checkout failure is reported')
+  ui.close()
+end)
 test('UI publication colors and descriptions use the snapshot and keep freshness visible after resizing', function()
   local alice = git.session(a)
   vim.fn.writefile({ 'local' }, a .. '/local.txt'); assert(alice.stage('local.txt')); assert(alice.commit('Local only'))

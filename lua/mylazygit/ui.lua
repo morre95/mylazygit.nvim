@@ -884,7 +884,20 @@ function M.get_bottom_view()
 end
 
 function M.get_current_worktree_line()
-	return state.current_worktree_line
+	local section = state.sections.worktree
+	if section and section.win == vim.api.nvim_get_current_win() then
+		return vim.api.nvim_win_get_cursor(section.win)[1]
+	end
+end
+
+function M.get_current_local_branch()
+	local section = state.sections.diff
+	if not section or section.win ~= vim.api.nvim_get_current_win() or active_bottom_view_name() ~= "local_branches" then
+		return nil
+	end
+	local view_data = bottom_view_data_for("local_branches")
+	local items = view_data and view_data.items
+	return items and items[vim.api.nvim_win_get_cursor(section.win)[1]]
 end
 
 function M.get_current_commit_line()

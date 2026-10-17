@@ -315,7 +315,7 @@ function M.refresh()
 		},
 		keymap = {
 			lines = {
-				"[?]help [r]efresh [Space]toggle-stage [gct]temp-checkout [gcr]return [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [ghr]repo [C]onflicts [q]uit",
+				"[?]help [r]efresh [Space]stage/checkout [gct]temp-checkout [gcr]return [gsa]dd-all [c]ommit [aic]AI-commit [A]mend [gss]quash [p]ull [P]ush [f]etch [gzz]stash [gzp]pop [gpr]pr [ghr]repo [C]onflicts [q]uit",
 				"<Tab>/<S-Tab> cycle panes · [`/`] cycle Local/Remote/Diff bottom view · Use arrow keys to move",
 			},
 		},
@@ -1123,6 +1123,17 @@ local function switch_new_branch()
 	end)
 end
 
+local function switch_to_branch(branch)
+	if not git.has_local_branch(branch) then
+		notify(string.format("Branch %s not found", branch), vim.log.levels.WARN)
+		return
+	end
+
+	run_and_refresh(function()
+		return select(1, git.switch(branch))
+	end, string.format("Switched to %s", branch))
+end
+
 local function switch_branch()
 	if not repo_required() then
 		return
@@ -1139,14 +1150,7 @@ local function switch_branch()
 			return
 		end
 
-		if not git.has_local_branch(choice) then
-			notify(string.format("Branch %s not found", choice), vim.log.levels.WARN)
-			return
-		end
-
-		run_and_refresh(function()
-			return select(1, git.switch(choice))
-		end, string.format("Switched to %s", choice))
+		switch_to_branch(choice)
 	end)
 end
 
@@ -1756,6 +1760,15 @@ local function toggle_stage_current()
 	end
 end
 
+local function activate_current_selection()
+	local branch = ui.get_current_local_branch()
+	if branch then
+		if repo_required() then switch_to_branch(branch) end
+	elseif ui.get_current_worktree_line() then
+		toggle_stage_current()
+	end
+end
+
 local function stash_push()
 	if not repo_required() then
 		return
@@ -2094,12 +2107,12 @@ keymap_mappings = {
 		explain = "Choose a local branch and explicitly confirm replaying private commits or Rewrite when the replayed history includes published commits. Unknown evidence and protected published branches are refused; cancellation changes no refs or index.\nRebase changes only the reviewed current branch, regardless of rebase.updateRefs. Existing staged changes can prevent Git from rebasing and remain intact. Resolve conflicts with X, then continue, abort or skip with gx. Publish private replay with P; published replay retains the pre-rebase reviewed lease for gPF through conflict recovery and fetches.",
 	},
 
-	-- Toggle staging
+	-- Stage a file or check out a local branch
 	{
 		lhs = "<Space>",
-		rhs = toggle_stage_current,
-		desc = "Toggle stage",
-		explain = "Toggle the staging state of the file under the cursor in the worktree pane.\nIf the file is staged, it will be unstaged. If it is unstaged or untracked, it will be staged.\nThis is the fastest way to stage/unstage individual files without opening a picker.",
+		rhs = activate_current_selection,
+		desc = "Toggle stage / checkout branch",
+		explain = "In Local Branches, check out the branch under the cursor (git switch <name>).\nMoving the cursor only previews branch history; press Space to switch. Git refuses a switch that would overwrite local changes.\nIn Worktree, toggle the staging state of the file under the cursor: staged files are unstaged, and unstaged or untracked files are staged.",
 	},
 
 	-- Stash

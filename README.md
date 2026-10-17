@@ -78,7 +78,7 @@ Key | Action
 `r` | Refresh all panes (`git status`, log, branches, diff)
 `?` | Open in-app keymap help popup
 `i` | Run `git init`
-`<Space>` | Toggle stage/unstage for the file under cursor
+`<Space>` | In Worktree: toggle stage/unstage for the file under cursor. In Local Branches: check out the branch under cursor
 `[` / `]` | Cycle bottom pane view (local branches / remote branches / diff preview)
 `gsf` | Stage selected files (`git add <file>`)
 `gsr` | Restore selected tracked files (`git restore -- <file>`)
