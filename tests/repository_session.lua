@@ -805,6 +805,30 @@ test('UI publication colors and descriptions use the snapshot and keep freshness
   end
   ui.close()
 end)
+test('rapid pull and push reports busy once without inspecting the remote', function()
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_system, original_systemlist = vim.system, vim.fn.systemlist
+  local complete, probes = nil, 0
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'pull' then complete = callback; return {} end
+    return original_system(cmd, opts, callback)
+  end
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'ls-remote' then probes = probes + 1 end
+    return original_systemlist(cmd)
+  end
+  action('p'); assert(complete, 'Real pull entrypoint reached the async process boundary')
+  local start = #notifications
+  action('P'); action('P')
+  local messages = vim.list_slice(notifications, start + 1)
+  complete({ code = 0, stdout = '', stderr = '' })
+  vim.system, vim.fn.systemlist = original_system, original_systemlist
+  assert(vim.wait(5000, function() return git.session(a).repository_state().running == nil end))
+  ui.close()
+  equal(probes, 0, 'Busy push must not contact the remote before checking the running operation')
+  equal(#messages, 1, 'Repeated busy presses give one clear notification')
+end)
 test('UI reports a held publication and rejects a second mutation until completion', function()
   local alice = git.session(a)
   vim.fn.writefile({ 'publish' }, a .. '/publish.txt'); assert(alice.stage('publish.txt')); assert(alice.commit('Publish'))
@@ -819,6 +843,145 @@ test('UI reports a held publication and rejects a second mutation until completi
   assert(vim.wait(5000, function() return alice.repository_state().running == nil and ui_text():find('Repository: ready', 1, true) end), 'Completion refresh shows ready')
   ui.close()
 end)
+test('push destination checks run asynchronously while reserving the repository', function()
+  local alice = git.session(a)
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_system, original_systemlist = vim.system, vim.fn.systemlist
+  local pending, synchronous_probes, async_probes = nil, 0, 0
+  vim.fn.systemlist = function(cmd)
+    if type(cmd) == 'table' and cmd[4] == 'ls-remote' then synchronous_probes = synchronous_probes + 1 end
+    return original_systemlist(cmd)
+  end
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'ls-remote' then
+      async_probes = async_probes + 1
+      if not pending then pending = { cmd, opts, callback }; return {} end
+    end
+    return original_system(cmd, opts, callback)
+  end
+  action('P')
+  local held = pending ~= nil and alice.repository_state().running ~= nil
+  if pending then
+    equal(alice.switch_create('during-inspection'), false, 'Other mutations are refused during preflight, before publication starts')
+    original_system(unpack(pending))
+  end
+  assert(vim.wait(5000, function() return alice.repository_state().running == nil end))
+  vim.system, vim.fn.systemlist = original_system, original_systemlist
+  ui.close()
+  equal(synchronous_probes, 0, 'Push must not block input with synchronous network inspection')
+  assert(held, 'Push reserves the repository before waiting for remote inspection')
+  assert(async_probes > 0, 'Destination inspection still runs before publication')
+end)
+for _, change in ipairs({ 'branch', 'head', 'endpoint', 'refspec' }) do
+  test('async push inspection refuses changed ' .. change .. ' before publication', function()
+    local alice = git.session(a)
+    vim.fn.writefile({ 'publish' }, a .. '/publish.txt'); assert(alice.stage('publish.txt')); assert(alice.commit('Publish'))
+    local target = assert(alice.resolve_push_target({ inspect_remote = true }))
+    local remote_head = command(remote, { 'rev-parse', 'main' })
+    local original, pending, completed, pushes = vim.system, nil, nil, 0
+    vim.system = function(cmd, opts, callback)
+      if cmd[4] == 'ls-remote' then pending = { cmd, opts, callback }; return {} end
+      if cmd[4] == 'push' then pushes = pushes + 1 end
+      return original(cmd, opts, callback)
+    end
+    alice.push_target_async(target, function(ok, output, result) completed = { ok, output, result } end)
+    assert(pending, 'Revalidation waits at the remote process boundary')
+    if change == 'branch' then command(a, { 'switch', '-c', 'elsewhere' })
+    elseif change == 'head' then command(a, { '-c', 'user.name=Alice', '-c', 'user.email=alice@example.test', 'commit', '--allow-empty', '-m', 'External commit' })
+    elseif change == 'endpoint' then command(a, { 'config', 'remote.origin.pushurl', b })
+    else command(a, { 'config', 'remote.origin.push', 'main:refs/heads/elsewhere' }) end
+    original(unpack(pending))
+    assert(vim.wait(5000, function() return completed ~= nil end))
+    vim.system = original
+    equal(completed[1], false, 'Changed intent prevents publication')
+    equal(pushes, 0, 'No push process starts after a changed selection')
+    equal(command(remote, { 'rev-parse', 'main' }), remote_head, 'Remote history remains unchanged')
+    equal(alice.repository_state().running, nil, 'Failed inspection releases its reservation')
+    assert(alice.switch_create('after-refusal'), 'Further repository actions work')
+  end)
+end
+test('async push inspection distinguishes missing remote branches and requires publication confirmation', function()
+  local alice = git.session(a)
+  command(remote, { 'update-ref', '-d', 'refs/heads/main' })
+  local selected
+  alice.resolve_push_target_async({ inspect_remote = true }, function(target, err) selected = { target, err } end)
+  assert(vim.wait(5000, function() return selected ~= nil end))
+  local target = assert(selected[1], selected[2])
+  equal(target.remote_exists, false, 'Exit 2 means verified absence')
+  equal(target.requires_confirmation, true, 'Deleted upstream requires review before recreation')
+  local completed
+  alice.push_target_async(target, function(ok, output) completed = { ok, output } end)
+  assert(vim.wait(5000, function() return completed ~= nil end))
+  equal(completed[1], false, 'Unconfirmed first publication is refused')
+  assert(table.concat(completed[2], '\n'):find('Confirm', 1, true), 'Refusal explains confirmation')
+  target.confirmed = true; completed = nil
+  alice.push_target_async(target, function(ok) completed = { ok } end)
+  assert(vim.wait(5000, function() return completed ~= nil end)); assert(completed[1])
+  equal(command(remote, { 'rev-parse', 'main' }), target.head, 'Confirmed publication creates only the selected branch')
+end)
+test('async push inspection checks shorthand destination collisions without synchronous network calls', function()
+  local alice = git.session(a)
+  command(a, { 'config', 'remote.origin.push', 'main:team-topic' })
+  command(remote, { 'tag', 'team-topic', 'main' })
+  local original, selected = vim.fn.systemlist, nil
+  vim.fn.systemlist = function(cmd)
+    assert(not (type(cmd) == 'table' and cmd[4] == 'ls-remote'), 'Shorthand remote inspection must also be asynchronous')
+    return original(cmd)
+  end
+  alice.resolve_push_target_async({ inspect_remote = true }, function(target, err) selected = { target, err } end)
+  assert(vim.wait(5000, function() return selected ~= nil end))
+  vim.fn.systemlist = original
+  equal(selected[1], nil, 'Remote tag collision is refused')
+  assert(selected[2]:find('non-branch', 1, true), 'Collision has an actionable diagnostic')
+end)
+test('async push inspection releases UI reservations when launching a probe fails', function()
+  local alice = git.session(a)
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original, start = vim.system, #notifications
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'ls-remote' then error('probe launch failed') end
+    return original(cmd, opts, callback)
+  end
+  action('P')
+  vim.system = original
+  equal(alice.repository_state().running, nil, 'Failed preflight cannot leave the UI locked')
+  assert(table.concat(vim.list_slice(notifications, start + 1), '\n'):find('probe launch failed', 1, true), 'Launch failure is reported')
+  action('P')
+  assert(vim.wait(5000, function() return alice.repository_state().running == nil end), 'Retry completes normally')
+  ui.close()
+end)
+test('async push inspection preserves synchronous fallback and structured outcomes', function()
+  local alice = git.session(a)
+  local target = assert(alice.resolve_push_target({ inspect_remote = true }))
+  local original, completed = vim.system, nil
+  vim.system = nil
+  alice.push_target_async(target, function(ok, output, result) completed = { ok, result } end)
+  vim.system = original
+  assert(completed[1], 'Fallback completes successfully')
+  equal(completed[2].status, 'success', 'Process exit codes do not replace mutation outcome status')
+  equal(alice.repository_state().running, nil, 'Fallback releases the reservation')
+end)
+for _, failure in ipairs({ 'review', 'publication' }) do
+  test('async push inspection releases its reservation after ' .. failure .. ' exceptions', function()
+    local alice = git.session(a)
+    if failure == 'review' then command(remote, { 'update-ref', '-d', 'refs/heads/main' }) end
+    local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+    vim.api.nvim_set_current_dir(a); plugin.open()
+    local original_system, original_confirm = vim.system, vim.fn.confirm
+    vim.fn.confirm = function() error('review provider failed') end
+    vim.system = function(cmd, opts, callback)
+      if cmd[4] == 'push' then error('publication launch failed') end
+      return original_system(cmd, opts, callback)
+    end
+    action('P')
+    local released = vim.wait(5000, function() return alice.repository_state().running == nil end)
+    vim.system, vim.fn.confirm = original_system, original_confirm
+    ui.close()
+    assert(released, 'Asynchronous ' .. failure .. ' exception must release the reservation')
+  end)
+end
 test('apply rebase recovery works through synchronous fallback without leaking editor environment', function()
   local alice = git.session(a)
   assert(alice.switch_create('feature'))
@@ -867,6 +1030,7 @@ test('fork publication UI displays separate full targets and confirms the destin
     return accepted and 1 or 2
   end
   action('P')
+  assert(vim.wait(5000, function() return prompts == 1 and alice.repository_state().running == nil end), 'Cancelled asynchronous review releases the repository')
   equal(alice.remote_branch_exists('my/fork', 'main'), false, 'Cancel leaves fork untouched')
   accepted = true; action('P')
   assert(vim.wait(5000, function() return alice.remote_branch_exists('my/fork', 'main') end), 'Confirmed fork publication completes')
@@ -902,6 +1066,7 @@ test('explicit push selection supports first publication, cancellation and stale
   action('gPp'); stage = 'input'; action('gPp')
   equal(prompts, 0, 'Cancelled selections have no publication confirmation')
   stage = 'confirm'; action('gPp')
+  assert(vim.wait(5000, function() return prompts == 1 and alice.repository_state().running == nil end), 'Cancelled explicit asynchronous review completes')
   equal(alice.remote_branch_exists('origin', 'team/topic'), false, 'Confirmation cancellation changes no refs')
   stage = 'stale'; action('gPp'); assert(pending); assert(alice.switch('main')); pending('team/topic')
   equal(prompts, 1, 'Changed branch is refused before confirmation')

@@ -84,6 +84,18 @@ local function notify(msg, level)
 	vim.notify(msg, level or vim.log.levels.INFO, { title = "MyLazyGit" })
 end
 
+local busy_notice
+local function sync_ready()
+	local running = git.running_mutation()
+	if not running then busy_notice = nil; return true end
+	if busy_notice ~= running then
+		local label = running:find("pull", 1, true) and "Pull" or (running:find("push", 1, true) and "Push" or "Another Git operation")
+		notify(label .. " is still running. Wait for it to finish, then retry.")
+		busy_notice = running
+	end
+	return false
+end
+
 local function repo_required()
 	if git.is_repo() then
 		return true
@@ -533,7 +545,7 @@ local function run_async_and_refresh(async_fn, success_msg)
 			notify(table.concat(lines, "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
 		elseif ok and success_msg then
 			notify(success_msg)
-		elseif not ok and output then
+		elseif not ok and output and not (result and result.status == "rejected") then
 			notify(table.concat(output, "\n"), vim.log.levels.WARN)
 		end
 		M.refresh()
@@ -765,24 +777,51 @@ local function target_label(target)
 	return target.remote .. " " .. target.ref
 end
 
-local function choose_push_target(opts, callback, always_confirm)
-	local target, err = git.resolve_push_target(vim.tbl_extend("force", opts or {}, { inspect_remote = true }))
-	if not target then notify(err, vim.log.levels.WARN); return end
+local function review_push_target(target, always_confirm)
 	if target.requires_confirmation or always_confirm then
 		local answer = confirm(string.format("Publish %s to remote %s, branch %s?",
 			target.local_branch, target.remote, target.ref), "&Publish\n&Cancel", 2)
-		if answer ~= 1 then notify("Push cancelled"); return end
+		if answer ~= 1 then return false end
 		target.confirmed = true
 	end
+	return true
+end
+
+local function choose_push_target(opts, callback, always_confirm)
+	local target, err = git.resolve_push_target(vim.tbl_extend("force", opts or {}, { inspect_remote = true }))
+	if not target then notify(err, vim.log.levels.WARN); return end
+	if not review_push_target(target, always_confirm) then notify("Push cancelled"); return end
 	callback(target)
 end
 
 local function push_to_target(target, callback)
-	git.push_target_async(target, function(ok, output)
+	git.push_target_async(target, function(ok, output, result)
 		if ok then notify("Pushed to " .. target_label(target))
-		else notify(table.concat(output, "\n"), vim.log.levels.WARN) end
+		elseif not (result and result.status == "rejected") then notify(table.concat(output, "\n"), vim.log.levels.WARN) end
 		M.refresh()
 		if callback then callback(ok, target) end
+	end)
+end
+
+local function push_with_review(opts)
+	if not sync_ready() then return end
+	run_async_and_refresh(function(callback)
+		git.mutate_async("push_target_async", function(done)
+			notify("Checking push destination...")
+			local expected = git.repository_state()
+			git.resolve_push_target_async(vim.tbl_extend("force", opts or {}, { inspect_remote = true }), function(target, err)
+				local continued, continuation_error = pcall(function()
+					if not target then done(false, { err }); return end
+					if not git.validate_state(expected) then done(false, { "Repository changed during push inspection; retry." }, "rejected"); return end
+					if not review_push_target(target) then done(false, { "Push cancelled" }, "cancelled"); return end
+					git.push_target_async(target, function(ok, output)
+						if ok then notify("Pushed to " .. target_label(target)) end
+						done(ok, output)
+					end)
+				end)
+				if not continued then done(false, { tostring(continuation_error) }) end
+			end)
+		end, callback)
 	end)
 end
 
@@ -861,6 +900,7 @@ local function git_init()
 end
 
 local function git_pull()
+	if not sync_ready() then return end
 	if not repo_required() then return end
 	local target, err = git.resolve_pull_target()
 	if not target then notify(err, vim.log.levels.WARN); return end
@@ -871,11 +911,13 @@ end
 local git_pull_rebase = git_pull
 
 local function git_push()
+	if not sync_ready() then return end
 	if not repo_required() then return end
-	choose_push_target({}, function(target) push_to_target(target) end)
+	push_with_review({})
 end
 
 local function git_push_override()
+	if not sync_ready() then return end
 	if not repo_required() then return end
 	local branch = git.current_branch()
 	if not branch then notify("Cannot push from detached HEAD; switch to a local branch.", vim.log.levels.WARN); return end
@@ -886,7 +928,7 @@ local function git_push_override()
 			if git.current_branch() ~= branch then notify("Branch changed since target selection; retry.", vim.log.levels.WARN); return end
 			destination = vim.trim(destination)
 			local ref = destination:match("^refs/") and destination or ("refs/heads/" .. destination)
-			choose_push_target({ remote = remote, ref = ref }, function(target) push_to_target(target) end)
+			push_with_review({ remote = remote, ref = ref })
 		end)
 	end)
 end

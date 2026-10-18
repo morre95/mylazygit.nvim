@@ -97,15 +97,15 @@ end
 --- Async git command using vim.system (Neovim 0.10+).
 --- Falls back to synchronous `system()` on older versions.
 --- @param args string[] git subcommand + arguments
---- @param opts? {silent?: boolean, loading_msg?: string}
---- @param callback fun(ok: boolean, output: string[])
+--- @param opts? {silent?: boolean, loading_msg?: string, exit_code?: boolean}
+--- @param callback fun(ok: boolean, output: string[], code?: integer)
 local function system_async(args, opts, callback)
 	opts = opts or {}
 
 	-- Fallback: no vim.system (< 0.10)
 	if not vim.system then
-		local ok, output = system(args, opts)
-		callback(ok, output)
+		local ok, output, code = system(args, opts)
+		callback(ok, output, opts.exit_code and code or nil)
 		return
 	end
 
@@ -124,9 +124,54 @@ local function system_async(args, opts, callback)
 			if not ok and not opts.silent then
 				vim.notify(table.concat(output, "\n"), vim.log.levels.ERROR, { title = "MyLazyGit" })
 			end
-			callback(ok, output)
+			callback(ok, output, opts.exit_code and result.code or nil)
 		end)
 	end)
+end
+
+-- Reuse the same target validation for sync and async callers. Only remote
+-- inspections yield; local Git queries and policy checks keep their semantics.
+local function inspect_async(fn, callback)
+	local owner = token
+	local inspections, pending = {}, nil
+	local thread = coroutine.create(function()
+		return fn(function(args, opts)
+			pending = table.concat(args, "\0")
+			return coroutine.yield(args, opts)
+		end)
+	end)
+	local finished = false
+	local function resume(...)
+		if finished then return end
+		return in_context(owner, function(...)
+			if pending then inspections[pending] = pack(...); pending = nil end
+			local result = pack(coroutine.resume(thread, ...))
+			if not result[1] or coroutine.status(thread) == "dead" then
+				finished = true
+				-- Input and external Git commands may change local policy while a
+				-- probe is pending. Replay validation against current local state,
+				-- reusing server replies so this final check cannot wait on network.
+				if result[1] and result[2] and next(inspections) then
+					local checked = pack(pcall(fn, function(args)
+						local reply = inspections[table.concat(args, "\0")]
+						if not reply then error("Sync destination changed during inspection; retry the operation.", 0) end
+						return unpack(reply, 1, reply.n)
+					end))
+					if not checked[1] then result = checked
+					elseif not vim.deep_equal(result, checked) then
+						result = { n = 2, false, "Sync destination or source changed during inspection; retry the operation." }
+					end
+				end
+				if not result[1] then callback(nil, tostring(result[2]))
+				else callback(unpack(result, 2, result.n)) end
+				return
+			end
+			local opts = vim.tbl_extend("force", result[3] or {}, { exit_code = true })
+			local ok, err = pcall(system_async, result[2], opts, resume)
+			if not ok then finished = true; callback(nil, tostring(err)) end
+		end, ...)
+	end
+	resume()
 end
 
 --- Async external command using vim.system.
@@ -335,7 +380,7 @@ function M.resolve_pull_target()
 	return target
 end
 
-local function configured_branch_destination(destination, endpoint)
+local function configured_branch_destination(destination, endpoint, inspect)
 	if destination:match("^refs/heads/") then return destination end
 	if destination:match("^refs/") then return nil, "Configured push destination must identify a branch." end
 	local full = "refs/heads/" .. destination
@@ -344,7 +389,7 @@ local function configured_branch_destination(destination, endpoint)
 	end
 	-- Git's unqualified destination can name an existing tag or be ambiguous.
 	-- Inspect its DWIM candidates before selecting a branch namespace.
-	local ok, refs = system({ "ls-remote", "--", endpoint }, { silent = true })
+	local ok, refs = inspect({ "ls-remote", "--", endpoint }, { silent = true })
 	if not ok then return nil, "Cannot inspect configured push destination; verify its URL/authentication." end
 	local candidates = { [destination] = true, ["refs/" .. destination] = true,
 		["refs/tags/" .. destination] = true, [full] = true,
@@ -363,7 +408,7 @@ local function configured_branch_destination(destination, endpoint)
 	return full
 end
 
-function M.resolve_push_target(opts)
+local function resolve_push_target(opts, inspect)
 	local selected_head = head_oid()
 	if not selected_head then return nil, "Cannot inspect source HEAD; publication state is unknown." end
 	opts = opts or {}
@@ -417,7 +462,7 @@ function M.resolve_push_target(opts)
 		elseif source == local_ref or source == branch or source == "HEAD" then ref = destination
 		else return nil, "Push refspec does not map the current branch; configure its destination." end
 
-		ref, err = configured_branch_destination(ref, endpoint)
+		ref, err = configured_branch_destination(ref, endpoint, inspect)
 		if not ref then return nil, err end
 	end
 	if not ref then
@@ -452,7 +497,7 @@ function M.resolve_push_target(opts)
 		set_upstream = not upstream, endpoint = endpoint, override = opts.remote ~= nil or opts.ref ~= nil }
 	target.requires_confirmation = target.override or not upstream
 	if opts.inspect_remote then
-		local exists, output, code = system({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
+		local exists, output, code = inspect({ "ls-remote", "--exit-code", "--heads", "--", target.endpoint, target.ref }, { silent = true })
 		if not exists and (code ~= 2 or #output > 0) then
 			return nil, "Cannot inspect push destination; verify URL/authentication: " .. table.concat(output, "\n")
 		end
@@ -464,6 +509,14 @@ function M.resolve_push_target(opts)
 		end
 	end
 	return target
+end
+
+function M.resolve_push_target(opts)
+	return resolve_push_target(opts, system)
+end
+
+function M.resolve_push_target_async(opts, callback)
+	inspect_async(function(inspect) return resolve_push_target(opts, inspect) end, callback)
 end
 
 -- Publication evidence is always relative to cached tracking history.
@@ -612,13 +665,13 @@ function M.publication_snapshot(target, limit)
 	return snapshot
 end
 
-local function revalidate_target(target, operation)
+local function revalidate_target(target, operation, inspect)
 	if type(target) ~= "table" or M.current_branch() ~= target.local_branch then
 		return nil, "Branch changed since target selection; retry the operation."
 	end
 	local resolved, err
 	if operation == "push" then
-		resolved, err = M.resolve_push_target(target.override and { remote = target.remote, ref = target.ref, inspect_remote = true } or { inspect_remote = true })
+		resolved, err = resolve_push_target(target.override and { remote = target.remote, ref = target.ref, inspect_remote = true } or { inspect_remote = true }, inspect or system)
 	else resolved, err = M.resolve_pull_target() end
 	if not resolved then return nil, err end
 	if target.head and resolved.head ~= target.head then return nil, "Source commit changed since target selection; retry the operation." end
@@ -629,8 +682,8 @@ local function revalidate_target(target, operation)
 	return resolved
 end
 
-local function target_args(target, operation, rebase)
-	local resolved, err = revalidate_target(target, operation)
+local function target_args(target, operation, rebase, inspect)
+	local resolved, err = revalidate_target(target, operation, inspect)
 	if not resolved then return nil, err end
 	if operation == "push" and resolved.requires_confirmation and not target.confirmed then
 		return nil, "Confirm first publication or explicit override to " .. target.remote .. " " .. target.ref .. "."
@@ -664,9 +717,11 @@ function M.pull_target_async(target, rebase, callback)
 end
 
 function M.push_target_async(target, callback)
-	local args, err = target_args(target, "push")
-	if not args then callback(false, { err }); return end
-	system_async(args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
+	inspect_async(function(inspect) return target_args(target, "push", nil, inspect) end, function(args, err)
+		if not args then callback(false, { err }); return end
+		local launched, launch_error = pcall(system_async, args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
+		if not launched then callback(false, { tostring(launch_error) }) end
+	end)
 end
 
 -- Callers may add protected branches but can never unprotect main.
@@ -1727,6 +1782,11 @@ end
 function M.on_mutation(callback)
 	observers[key] = observers[key] or {}
 	observers[key][#observers[key] + 1] = callback
+end
+
+--- Cheap busy check for UI entrypoints, before target inspection or prompts.
+function M.running_mutation()
+	return reservations[key] and reservations[key].action or nil
 end
 local function changed_lifecycle()
 	for _, callback in ipairs(observers[key] or {}) do
