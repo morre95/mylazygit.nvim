@@ -778,7 +778,10 @@ local function target_label(target)
 end
 
 local function review_push_target(target, always_confirm)
-	if target.requires_confirmation or always_confirm then
+	-- A gPp override was chosen remote-and-branch by the user; that choice is the review.
+	if target.override and not always_confirm then
+		target.confirmed = true
+	elseif target.requires_confirmation or always_confirm then
 		local answer = confirm(string.format("Publish %s to remote %s, branch %s?",
 			target.local_branch, target.remote, target.ref), "&Publish\n&Cancel", 2)
 		if answer ~= 1 then return false end
@@ -2032,7 +2035,7 @@ keymap_mappings = {
 	},
 	{
 		lhs = "gPp", rhs = git_push_override, desc = "Choose explicit push destination",
-		explain = "Choose a remote and full destination branch.\nReview and confirm the full destination before first publication or override.\nExisting pull upstream is preserved; ordinary push never forces.",
+		explain = "Choose a remote and full destination branch.\nChoosing the remote and branch confirms the destination; no further publish prompt follows.\nExisting pull upstream is preserved; ordinary push never forces.",
 	},
 	{
 		lhs = "gPF",
