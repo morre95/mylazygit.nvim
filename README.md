@@ -56,7 +56,7 @@ return {
 
 `gbw` operates on two local branches with valid upstreams and a clean worktree/index. It first fetches and fast-forwards main; divergence stops for your decision. It then fetches and merges the feature upstream, merges main into the feature, and merges the feature into main. The default **Merge** choice preserves published commit identities and allows ordinary publication with `P`. Missing, invalid or deleted synchronization targets stop the workflow; they are never skipped. Git settings such as `pull.rebase`, `merge.ff`, autostash and branch merge options cannot silently select replay, squash or leave a successful merge uncommitted.
 
-The separate **Rebase** choice uses the same cleanup review as `gbr`: private replay needs explicit confirmation; published replay requires **Rewrite**, with protected branches and unknown publication evidence refused. Published cleanup retains the remote commit reviewed before replay for later `gPF`. `merge_workflow.rebase_args` is no longer supported: remove nonempty legacy arguments and choose reviewed rebase explicitly. Nothing in setup enables automatic rebase.
+The separate **Rebase** choice uses the same cleanup review as `gbr`, except that choosing **Rebase** is itself the confirmation for private replay; published replay requires **Rewrite**, with protected branches and unknown publication evidence refused. Published cleanup retains the remote commit reviewed before replay for later `gPF`. `merge_workflow.rebase_args` is no longer supported: remove nonempty legacy arguments and choose reviewed rebase explicitly. Nothing in setup enables automatic rebase.
 
 Cancellation at branch/integration selection changes no refs or index. Rebase review happens after synchronization; cancelling there preserves feature history and reports the synchronization steps already completed. On any conflict, hook rejection or other failed step, the workflow stops and reports the current repository state and completed, failed and remaining steps. Resolve conflicts with `X`, then use `gx` to recover the interrupted Git operation. A deliberate **continue** in `gx` or the resolver's commit/continue confirmation finishes the active Git operation, then resumes the remembered remaining workflow steps only if the worktree, branch/HEAD, refs, synchronization mappings and operation identity still match. Every conflicted file must be resolved and staged; further merge/rebase conflicts pause again, and a failed continuation stays recoverable for retry. A stale plan or unrelated dirty work stops the remaining integration with an explanation even if Git recovery succeeds. **Abort** delegates to Git for the current operation and preserves synchronization steps already completed; it does not reset the repository to its pre-workflow state. **Cancel** leaves Git unchanged. The header and recovery result show current branch, index/conflicts and remaining work; publication always remains manual.
 
@@ -85,7 +85,7 @@ Key | Action
 `gsR` | Restore all tracked files (destructive)
 `gsa` | Stage everything (`git add .`)
 `gsc` | Stage all + commit
-`gsC` | Stage all + commit + pull rebase + optional push
+`gsC` | Stage all + commit + pull rebase + push (confirms only first publication, like `P`)
 `gsu` | Unstage selected files (`git restore --staged <file>`)
 `gsU` | Unstage everything (`git restore --staged .`)
 `gsp` | Pull with rebase (same behavior as `p`)
@@ -97,7 +97,7 @@ Key | Action
 `gcr` | Return to branch/commit from temporary checkout
 `p` | Pull with rebase from the current branch upstream (full remote source ref)
 `P` | Publish to the resolved push target; review first publication before proceeding
-`gPp` | Choose an explicit push remote and destination branch, then confirm the full destination
+`gPp` | Choose an explicit push remote and destination branch, then push
 `gPF` | Rewrite the push destination with a reviewed lease (`--force-with-lease=<ref>:<reviewed commit>`)
 `f` | Fetch configured remote
 `gpr` | Create GitHub pull request via `gh pr create`
@@ -127,9 +127,9 @@ Push selects `branch.<local>.pushRemote`, then `remote.pushDefault`, then the br
 
 First publication shows the full remote and destination ref and defaults to cancellation. With no push mapping, use `gPp` to deliberately choose a remote and branch; that choice is the confirmation, so no further publish prompt follows. Publication sets a pull upstream only when one is absent; publishing to a fork preserves an existing upstream. Ordinary push publishes one branch without force or automatic follow-tags; multiple push endpoints and mirror configuration are refused. Divergent remote history is rejected by Git. The `gsC` chain stops after a failed pull.
 
-Branch deletion supports multiple selections: choose each branch from the picker, then press **Esc** to finish (selecting every candidate also finishes). One confirmation lists all selected branches or remote destinations and defaults to **No**. Esc before selecting anything cancels. The result reports each successful or failed deletion; a refusal does not prevent attempts on the other selected branches.
+Branch deletion supports multiple selections: choose each branch from the picker, then press **Esc** to finish (selecting every candidate also finishes). Force (`gbD`) and remote (`gbx`) deletion show one confirmation listing all selected branches or remote destinations, defaulting to **No**; safe deletion (`gbd`) runs without one. Esc before selecting anything cancels. The result reports each successful or failed deletion; a refusal does not prevent attempts on the other selected branches.
 
-Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves the remote `team` branch `task` untouched. Safe deletion refuses unmerged branches; force deletion has a separate confirmation. Both respect branches checked out in any worktree.
+Local deletion (`gbd` / `gbD`) always stays local: deleting `team/task` leaves the remote `team` branch `task` untouched. Safe deletion refuses unmerged branches, so it needs no confirmation; force deletion asks first. Both respect branches checked out in any worktree.
 
 Remote deletion requires `gbx`. Its picker and confirmation identify the configured remote and full branch name separately, including names containing slashes. Cancelling before making a selection or declining confirmation changes no refs. Local branches and same-named remote tags remain intact. Tracking refs matching more than one configured remote prefix are omitted, so overlapping remote names cannot select a guessed destination.
 

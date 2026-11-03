@@ -777,11 +777,11 @@ local function target_label(target)
 	return target.remote .. " " .. target.ref
 end
 
-local function review_push_target(target, always_confirm)
+local function review_push_target(target)
 	-- A gPp override was chosen remote-and-branch by the user; that choice is the review.
-	if target.override and not always_confirm then
+	if target.override then
 		target.confirmed = true
-	elseif target.requires_confirmation or always_confirm then
+	elseif target.requires_confirmation then
 		local answer = confirm(string.format("Publish %s to remote %s, branch %s?",
 			target.local_branch, target.remote, target.ref), "&Publish\n&Cancel", 2)
 		if answer ~= 1 then return false end
@@ -790,10 +790,10 @@ local function review_push_target(target, always_confirm)
 	return true
 end
 
-local function choose_push_target(opts, callback, always_confirm)
+local function choose_push_target(opts, callback)
 	local target, err = git.resolve_push_target(vim.tbl_extend("force", opts or {}, { inspect_remote = true }))
 	if not target then notify(err, vim.log.levels.WARN); return end
-	if not review_push_target(target, always_confirm) then notify("Push cancelled"); return end
+	if not review_push_target(target) then notify("Push cancelled"); return end
 	callback(target)
 end
 
@@ -889,7 +889,7 @@ local function stage_all_and_commit_and_pull()
 				choose_push_target({}, function(push_target)
 					selected = true
 					git.push_target_async(push_target, done)
-				end, true)
+				end)
 				if not selected then done(false, { "Publication stopped after commit and pull; inspect targets and retry" }, "cancelled") end
 			end, cb)
 		end, "Committed, pulled and pushed")
@@ -1362,7 +1362,11 @@ local function merge_workflow()
 				main_branch = main_branch, feature_branch = choice,
 				mode = mode == choices[2] and "rebase" or "merge",
 				rebase_args = workflow_cfg.rebase_args, protected = cleanup_protected(),
-				review_cleanup = function(target) return confirm_cleanup(target) ~= nil end,
+				-- Choosing Rebase in the menu confirms private replay; published history still needs Rewrite.
+				review_cleanup = function(target)
+					if target.publication ~= "published" then target.confirmed = true; return true end
+					return confirm_cleanup(target) ~= nil
+				end,
 			})
 			local progress = result.workflow
 			local lines = vim.deepcopy(output or {})
@@ -1629,13 +1633,14 @@ local function delete_branch(force)
 	end
 	local prompt = force and "Force delete local branch (-D)" or "Delete local branch (-d)"
 	select_multiple(candidates, prompt, function(selection)
-		local verb = force and "Force delete" or "Delete"
-		local question = #selection == 1 and string.format("%s local branch %s?", verb, selection[1])
-			or string.format("%s %d local branches?\n%s", verb, #selection, table.concat(selection, "\n"))
-		local confirmation = confirm(question, "&Yes\n&No", 2)
-		if confirmation ~= 1 then
-			notify("Branch deletion cancelled", vim.log.levels.INFO)
-			return
+		-- Safe delete (-d) is refused by Git for unmerged branches, so only force delete asks.
+		if force then
+			local question = #selection == 1 and string.format("Force delete local branch %s?", selection[1])
+				or string.format("Force delete %d local branches?\n%s", #selection, table.concat(selection, "\n"))
+			if confirm(question, "&Yes\n&No", 2) ~= 1 then
+				notify("Branch deletion cancelled", vim.log.levels.INFO)
+				return
+			end
 		end
 		delete_selected_branches(selection, function(branch) return branch end, function(branch)
 			return git.delete_local_branch(branch, force)
@@ -1961,7 +1966,7 @@ keymap_mappings = {
 		lhs = "gsC",
 		rhs = stage_all_and_commit_and_pull,
 		desc = "Stage, commit, pull and push",
-		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the branch upstream; stop if pull fails\n4. Review the full resolved push destination, then optionally publish\n\nPull and push can use different remotes or branch names. Detached HEAD and missing or ambiguous mappings stop the workflow.",
+		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the branch upstream; stop if pull fails\n4. Push to the resolved destination like P; only first publication asks for confirmation\n\nPull and push can use different remotes or branch names. Detached HEAD and missing or ambiguous mappings stop the workflow.",
 	},
 	{
 		lhs = "gsu",
@@ -2119,7 +2124,7 @@ keymap_mappings = {
 		lhs = "gbd",
 		rhs = delete_branch_safe,
 		desc = "Delete local branches safely",
-		explain = "Safely delete local branches (git branch -d).\nChoose branches one by one, then Esc to finish; choosing every candidate also finishes. One confirmation lists the selected branches and defaults to No.\nLocal names containing slashes stay local, even when they resemble remote branches.\nGit refuses unmerged branches and branches checked out in any worktree. Each deletion result is reported; failures do not force deletion or prevent other selected attempts.",
+		explain = "Safely delete local branches (git branch -d).\nChoose branches one by one, then Esc to finish; choosing every candidate also finishes. No confirmation follows, since Git refuses unmerged branches.\nLocal names containing slashes stay local, even when they resemble remote branches.\nGit refuses unmerged branches and branches checked out in any worktree. Each deletion result is reported; failures do not force deletion or prevent other selected attempts.",
 	},
 	{
 		lhs = "gbD",
@@ -2143,7 +2148,7 @@ keymap_mappings = {
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: private replay needs confirmation; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
+		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: choosing Rebase confirms private replay; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
 	},
 	{
 		lhs = "gbr",
