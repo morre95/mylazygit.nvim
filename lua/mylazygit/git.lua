@@ -366,6 +366,13 @@ local function upstream_target(branch)
 	return { remote = remote, ref = ref, branch = ref:sub(12), local_branch = branch }
 end
 
+-- Unpublished: neither branch remote nor merge is configured (partial config is invalid, not unpublished).
+local function is_unpublished(branch)
+	local remote, remote_err = config_one("branch." .. branch .. ".remote")
+	local ref, ref_err = config_one("branch." .. branch .. ".merge", true)
+	return not remote and not ref and not remote_err and not ref_err
+end
+
 function M.resolve_pull_target()
 	local selected_head = head_oid()
 	if not selected_head then return nil, "Cannot inspect source HEAD; publication state is unknown." end
@@ -1117,7 +1124,8 @@ function M.merge_workflow(opts)
 	local main, feature = opts.main_branch, opts.feature_branch
 	local replay = opts.mode == "rebase"
 	local integration_label = (replay and "rebase " or "merge main into ") .. tostring(feature)
-	local progress = { completed = {}, remaining = {} }
+	local progress = { completed = {}, remaining = {}, warnings = {} }
+	local feature_unpublished = feature and feature ~= "" and is_unpublished(feature)
 	local function merge(ref, ff)
 		-- Command flags override pull/merge/branch options; never autostash or squash.
 		return system({ "merge", ff and "--ff-only" or "--ff", "--commit", "--no-edit", "--no-autostash", "--no-squash", "--", ref })
@@ -1152,6 +1160,11 @@ function M.merge_workflow(opts)
 		{ label = "checkout " .. tostring(main), run = function() return M.switch(main) end },
 		{ label = "merge feature into " .. tostring(main), run = function() return merge("refs/heads/" .. feature) end },
 	}
+	if feature_unpublished then
+		-- Nothing remote to synchronize; integration proceeds, but the user is told the feature is local-only.
+		table.remove(steps, 4)
+		table.insert(progress.warnings, "Warning: " .. feature .. " is not published (no upstream); its commits exist only locally. Publish it with P or gPp.")
+	end
 	for _, step in ipairs(steps) do table.insert(progress.remaining, step.label) end
 	local plan = { progress = progress, next = 1, worktree = key, feature_ref = "refs/heads/" .. tostring(feature) }
 	plan.advance = function(owner)
@@ -1170,23 +1183,28 @@ function M.merge_workflow(opts)
 				plan.pause = M.repository_state()
 				progress.status = plan.pause.operation and "paused" or "stopped"
 				table.remove(progress.remaining, 1)
-				return false, vim.list_extend({ "Merge workflow stopped at: " .. step.label }, diagnostics or {})
+				return false, vim.list_extend(vim.list_extend(vim.deepcopy(progress.warnings), { "Merge workflow stopped at: " .. step.label }), diagnostics or {})
 			end
 			table.insert(progress.completed, step.label)
 			table.remove(progress.remaining, 1)
 		end
 		progress.failed, progress.status = nil, "complete"
-		return true, { "Merge workflow completed for " .. feature .. " -> " .. main .. "; publish main with ordinary push. " ..
-			(progress.publication == "reviewed-rewrite" and "Publish feature with gPF using its pre-cleanup reviewed lease." or "Publish feature with ordinary push.") }
+		return true, vim.list_extend(vim.deepcopy(progress.warnings), { "Merge workflow completed for " .. feature .. " -> " .. main .. "; publish main with ordinary push. " ..
+			(progress.publication == "reviewed-rewrite" and "Publish feature with gPF using its pre-cleanup reviewed lease." or "Publish feature with ordinary push.") })
 		end)
 	end
 	plan.mapping = function()
 		local mappings = {}
 		for _, branch in ipairs({ main, feature }) do
 			local target = upstream_target(branch)
-			if not target then return nil end
-			local ok, urls = system({ "remote", "get-url", "--all", target.remote }, { silent = true })
-			mappings[branch] = { remote = target.remote, ref = target.ref, urls = target.remote == "." and {} or (ok and urls or false) }
+			if branch == feature and is_unpublished(feature) then
+				mappings[branch] = "unpublished"
+			elseif not target then
+				return nil
+			else
+				local ok, urls = system({ "remote", "get-url", "--all", target.remote }, { silent = true })
+				mappings[branch] = { remote = target.remote, ref = target.ref, urls = target.remote == "." and {} or (ok and urls or false) }
+			end
 		end
 		return mappings
 	end
@@ -1206,8 +1224,8 @@ function M.merge_workflow(opts)
 			progress.failed = "validate integration choice"
 			return false, { "merge_workflow.rebase_args is no longer supported; choose reviewed rebase explicitly (gbr or gbw)" }
 		end
-		-- Validate both synchronization mappings before any branch moves.
-		for _, branch in ipairs({ main, feature }) do
+		-- Validate synchronization mappings before any branch moves; an unpublished feature has none.
+		for _, branch in ipairs(feature_unpublished and { main } or { main, feature }) do
 			local target, err = upstream_target(branch)
 			if not target then progress.failed = "validate synchronization targets"; return false, { err } end
 			if not select(1, system({ "check-ref-format", target.ref }, { silent = true }))

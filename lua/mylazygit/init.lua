@@ -1381,7 +1381,8 @@ local function merge_workflow()
 			if progress.publication == "reviewed-rewrite" then
 				table.insert(lines, "Feature publication: after completing integration, switch to " .. choice .. " and use gPF with the pre-cleanup reviewed lease.")
 			else table.insert(lines, "Publication remains manual; after completing integration, use P on the branch to publish.") end
-			notify(table.concat(lines, "\n"), ok and vim.log.levels.INFO or vim.log.levels.WARN)
+			local warned = progress.warnings and #progress.warnings > 0
+			notify(table.concat(lines, "\n"), (ok and not warned) and vim.log.levels.INFO or vim.log.levels.WARN)
 			M.refresh()
 		end)
 	end)
@@ -2148,7 +2149,7 @@ keymap_mappings = {
 		lhs = "gbw",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
-		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nBoth local branches need valid upstreams and a clean worktree/index. Main updates by fast-forward only; divergence stops. Feature synchronization merges its upstream, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: choosing Rebase confirms private replay; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
+		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nMain needs a valid upstream and the worktree/index must be clean. Main updates by fast-forward only; divergence stops. A published feature first merges its upstream; an unpublished feature (no upstream) skips that step with a warning, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: choosing Rebase confirms private replay; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
 	},
 	{
 		lhs = "gbr",
