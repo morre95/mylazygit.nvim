@@ -76,7 +76,7 @@ Key | Action
 --- | ---
 `q` / `<Esc>` | Close the MyLazyGit window
 `r` | Refresh all panes (`git status`, log, branches, diff)
-`?` | Open in-app keymap help popup
+`?` | Open in-app keymap help popup (grouped by task; `/` searches keys, names and explanations)
 `i` | Run `git init`
 `<Space>` | In Worktree: toggle stage/unstage for the file under cursor. In Local Branches: check out the branch under cursor
 `[` / `]` | Cycle bottom pane view (local branches / remote branches / diff preview)

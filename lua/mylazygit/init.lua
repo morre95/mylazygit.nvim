@@ -1,6 +1,7 @@
 local git_module = require("mylazygit.git")
 local ui = require("mylazygit.ui")
 local helpers = require("mylazygit.helpers")
+local help = require("mylazygit.help")
 local conflict = require("mylazygit.conflict")
 local ai = require("mylazygit.ai")
 
@@ -1441,158 +1442,7 @@ local function recover_repository()
 end
 
 local function show_keymap_popup()
-	local mappings = keymap_mappings or {}
-	if vim.tbl_isempty(mappings) then
-		return
-	end
-
-	local header = { "MyLazyGit Keymaps", "-----------------", "" }
-	local list_lines = {}
-	for _, h in ipairs(header) do
-		table.insert(list_lines, h)
-	end
-
-	for _, map in ipairs(mappings) do
-		local label = map.lhs and string.format("[%s]", map.lhs) or ""
-		local desc = map.desc or ""
-		table.insert(list_lines, string.format("%-8s %s", label, desc))
-	end
-
-	-- Dimensioner
-	local list_width = 0
-	for _, line in ipairs(list_lines) do
-		list_width = math.max(list_width, vim.fn.strdisplaywidth(line))
-	end
-	-- Rimliga min/max och preview-bredd
-	list_width = math.min(math.max(list_width + 2, 32), math.floor(vim.o.columns * 0.45))
-	local preview_width = math.min(math.max(48, math.floor(vim.o.columns * 0.45)), vim.o.columns - list_width - 8)
-
-	local height = math.min(#list_lines, vim.o.lines - 6)
-
-	-- Centrera två fönster som ett block
-	local total_width = list_width + preview_width + 2 -- +2 som “mellanrum”
-	local row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 1)
-	local col_left = math.max(math.floor((vim.o.columns - total_width) / 2), 1)
-	local col_right = col_left + list_width + 2
-
-	-- Buffers
-	local buf_list = vim.api.nvim_create_buf(false, true)
-	local buf_prev = vim.api.nvim_create_buf(false, true)
-
-	-- Buffers: metadata
-	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf_list })
-	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf_prev })
-
-	vim.api.nvim_buf_set_lines(buf_list, 0, -1, false, list_lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_list })
-	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_prev })
-
-	vim.api.nvim_set_option_value("filetype", "mylazygit-help", { buf = buf_list })
-	vim.api.nvim_set_option_value("filetype", "mylazygit-explain", { buf = buf_prev })
-
-	-- Fönster
-	local win_list = vim.api.nvim_open_win(buf_list, true, {
-		relative = "editor",
-		width = list_width,
-		height = height,
-		row = row,
-		col = col_left,
-		border = "rounded",
-		style = "minimal",
-		zindex = 120,
-	})
-
-	local win_prev = vim.api.nvim_open_win(buf_prev, false, {
-		relative = "editor",
-		width = preview_width,
-		height = height,
-		row = row,
-		col = col_right,
-		border = "rounded",
-		style = "minimal",
-		zindex = 120,
-	})
-
-	-- Lite UX
-	vim.api.nvim_set_option_value("cursorline", true, { win = win_list })
-	vim.api.nvim_set_option_value("wrap", true, { win = win_prev })
-	vim.api.nvim_set_option_value("linebreak", true, { win = win_prev })
-	vim.api.nvim_set_option_value("breakindent", true, { win = win_prev })
-
-	-- Hjälpare: räkna om cursorrad -> index i mappings
-	local HEADER_LINES = #header
-	local function current_mapping_index()
-		local cur = vim.api.nvim_win_get_cursor(win_list)[1] -- 1-based
-		local idx = cur - HEADER_LINES
-		if idx < 1 or idx > #mappings then
-			return nil
-		end
-		return idx
-	end
-
-	-- Rendera preview för ett visst index
-	local function render_preview(idx)
-		local lines
-		if not idx then
-			lines = { "Move the cursor to a keymap to see its explanation." }
-		else
-			local m = mappings[idx] or {}
-			local explain = m.explain
-			if type(explain) == "string" then
-				lines = vim.split(explain, "\n", { plain = true })
-			elseif type(explain) == "table" then
-				lines = explain
-			else
-				lines = { "No explanation available" }
-			end
-			-- Lägg till titelrad
-			local title = string.format("Explanation: %s", m.desc or m.lhs or "")
-			table.insert(lines, 1, title)
-			table.insert(lines, 2, string.rep("—", math.min(#title, preview_width - 2)))
-		end
-
-		vim.api.nvim_set_option_value("modifiable", true, { buf = buf_prev })
-		vim.api.nvim_buf_set_lines(buf_prev, 0, -1, false, lines)
-		vim.api.nvim_set_option_value("modifiable", false, { buf = buf_prev })
-		-- Scrolla till toppen vid uppdatering
-		vim.api.nvim_win_set_cursor(win_prev, { 1, 0 })
-	end
-
-	-- Init-preview
-	render_preview(current_mapping_index())
-
-	-- Uppdatera preview när markören flyttas i list-fönstret
-	local aug = vim.api.nvim_create_augroup("MyLazyGitKeymapPreview", { clear = false })
-	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-		group = aug,
-		buffer = buf_list,
-		callback = function()
-			render_preview(current_mapping_index())
-		end,
-	})
-
-	local function close_all()
-		pcall(vim.api.nvim_del_augroup_by_name, "MyLazyGitKeymapPreview")
-		for _, w in ipairs({ win_list, win_prev }) do
-			if w and vim.api.nvim_win_is_valid(w) then
-				pcall(vim.api.nvim_win_close, w, true)
-			end
-		end
-		for _, b in ipairs({ buf_list, buf_prev }) do
-			if b and vim.api.nvim_buf_is_valid(b) then
-				pcall(vim.api.nvim_buf_delete, b, { force = true })
-			end
-		end
-	end
-
-	for _, buf in ipairs({ buf_list, buf_prev }) do
-		vim.keymap.set("n", "q", close_all, { buffer = buf, silent = true, nowait = true })
-		vim.keymap.set("n", "<Esc>", close_all, { buffer = buf, silent = true, nowait = true })
-	end
-
-	-- Låt j/k fungera som vanligt i listan (de är redan standard i Normal-läge).
-	-- Om du vill förhindra att man redigerar listan:
-	vim.api.nvim_set_option_value("modifiable", false, { buf = buf_list })
+	help.open(keymap_mappings)
 end
 
 local function delete_selected_branches(selection, format_branch, delete_one)
@@ -1906,27 +1756,30 @@ local function stash_drop()
 end
 
 keymap_mappings = {
-	{ lhs = "gx", rhs = recover_repository, desc = "Recover interrupted operation", explain = "Continue or abort the actual interrupted merge, rebase, cherry-pick or revert. Resolve and stage conflicts with X first. Continue deliberately resumes a remembered integration workflow while prerequisites remain valid; abort preserves completed synchronization. Cancel leaves Git unchanged. Other mutations are rejected until recovery completes." },
 	{
 		lhs = "q",
+		group = "General",
 		rhs = ui.close,
 		desc = "Quit MyLazyGit",
 		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
 	},
 	{
 		lhs = "<Esc>",
+		group = "General",
 		rhs = ui.close,
 		desc = "Quit MyLazyGit",
 		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
 	},
 	{
 		lhs = "r",
+		group = "General",
 		rhs = M.refresh,
 		desc = "Refresh status",
 		explain = "Re-read the git status and update every pane: worktree, commits, branches, diff preview, and info bar.\nUseful after making changes outside MyLazyGit or when the UI feels stale.",
 	},
 	{
 		lhs = "i",
+		group = "General",
 		rhs = git_init,
 		desc = "Git init",
 		explain = "Run `git init` in the current working directory.\nCreates a new empty Git repository with a .git folder. Use this when you open MyLazyGit in a directory that is not yet a git repo.",
@@ -1935,92 +1788,100 @@ keymap_mappings = {
 	-- Staging
 	{
 		lhs = "gsf",
+		group = "Staging",
 		rhs = stage_file,
 		desc = "Stage file",
 		explain = "Opens a picker to select files one at a time for staging (git add <file>).\nKeep selecting files until you press Esc to finish. Only the selected files are staged.",
 	},
 	{
 		lhs = "gsr",
+		group = "Staging",
 		rhs = restore_file,
 		desc = "Restore file",
 		explain = "Discard unstaged changes for selected tracked files (git restore -- <file>).\nThis reverts the working copy to match the index. Untracked files are not affected.\nWarning: discarded changes cannot be recovered.",
 	},
 	{
 		lhs = "gsR",
+		group = "Staging",
 		rhs = restore_all_files,
 		desc = "Restore all files",
 		explain = "Discard ALL unstaged changes in every tracked file (git restore -- <files>).\nA confirmation prompt is shown before proceeding.\nUntracked files are not affected.\n\nWarning: this is destructive and cannot be undone.",
 	},
 	{
 		lhs = "gsa",
+		group = "Staging",
 		rhs = stage_all,
 		desc = "Stage all files",
 		explain = "Stage every change in the working tree at once (git add .).\nThis includes new, modified, and deleted files. Equivalent to running `git add .` from the repo root.",
 	},
 	{
 		lhs = "gsc",
+		group = "Staging",
 		rhs = stage_all_and_commit,
 		desc = "Stage all and commit",
 		explain = "Two-step shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and create the commit\n\nHandy for quick saves when you want to commit everything in one action.",
 	},
 	{
 		lhs = "gsC",
+		group = "Staging",
 		rhs = stage_all_and_commit_and_pull,
 		desc = "Stage, commit, pull and push",
 		explain = "Full workflow shortcut:\n1. Stage all changes (git add .)\n2. Prompt for a commit message and commit\n3. Pull with rebase from the branch upstream; stop if pull fails\n4. Push to the resolved destination like P; only first publication asks for confirmation\n\nPull and push can use different remotes or branch names. Detached HEAD and missing or ambiguous mappings stop the workflow.",
 	},
 	{
 		lhs = "gsu",
+		group = "Staging",
 		rhs = unstage_file,
 		desc = "Unstage file",
 		explain = "Opens a picker to select staged files to remove from the index (git restore --staged <file>).\nThe file contents are not changed — only the staging is undone. The changes remain in your working tree.",
 	},
 	{
 		lhs = "gsU",
+		group = "Staging",
 		rhs = unstage_all_files,
 		desc = "Unstage all files",
 		explain = "Remove all files from the staging area at once (git restore --staged .).\nNo file contents are modified — this only undoes `git add`. Your working tree changes are preserved.",
-	},
-	{
-		lhs = "gsp",
-		rhs = git_pull_rebase,
-		desc = "Pull rebase",
-		explain = "Pull from the configured branch upstream, including differently named remote branches, and rebase local commits on top.\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
 	},
 
 	-- Commits
 	{
 		lhs = "c",
+		group = "Commits",
 		rhs = commit_changes,
 		desc = "Commit",
 		explain = "Open a prompt to type a commit message, then create the commit (git commit -m <message>).\nMake sure you have staged changes first (use gsf, gsa, or Space). If nothing is staged the commit will fail.",
 	},
 	{
 		lhs = "aic",
+		group = "Commits",
 		rhs = function() ai.generate_commit_message(git) end,
 		desc = "AI commit message",
 		explain = "Generate a commit message from the staged diff using OpenRouter, then let you edit it before committing.\nIf nothing is staged and there are working-tree changes, you'll be prompted to stage all changes first.",
 	},
 	{
 		lhs = "gss",
+		group = "Commits",
 		rhs = squash_commits,
 		desc = "Squash commits",
 		explain = "Combine recent commits into one, including existing staged changes. Select the oldest included commit (the root cannot be included), explicitly choose private cleanup or Rewrite for published history, then edit the message.\nUnknown publication evidence and protected published branches are refused. Cancellation preserves refs and index; a failed commit restores the original branch tip and staged work. Publish private work with P; published cleanup uses gPF with the pre-cleanup reviewed lease.",
 	},
 	{
 		lhs = "gct",
+		group = "Commits",
 		rhs = temporary_checkout_commit,
 		desc = "Temporary checkout commit",
 		explain = "Detach HEAD at the commit under the cursor in the Commits pane (git checkout --detach <hash>).\nUse this to step through commits one-by-one with live preview updates while moving in the list.\nYour original location is remembered so you can quickly return with [gcr].",
 	},
 	{
 		lhs = "gcr",
+		group = "Commits",
 		rhs = return_from_temporary_checkout,
 		desc = "Return from temp checkout",
 		explain = "Return to where you were before starting temporary commit checkout.\nIf you started from a branch, this switches back to that branch.\nIf you started detached, it returns to the previously recorded commit hash.",
 	},
 	{
 		lhs = "A",
+		group = "Commits",
 		rhs = amend_commit,
 		desc = "Amend commit",
 		explain = "Modify the latest commit and include existing staged changes. Explicitly choose private amend or Rewrite for published history before editing the pre-filled message.\nUnknown publication evidence and protected published branches are refused. Cancellation changes no refs or index. Publish private work with P; published cleanup retains its reviewed remote expectation for gPF, even after a fetch.",
@@ -2029,40 +1890,53 @@ keymap_mappings = {
 	-- Remote operations
 	{
 		lhs = "p",
+		group = "Sync",
 		rhs = git_pull,
 		desc = "Pull",
 		explain = "Pull the full source branch configured by branch.<name>.remote and branch.<name>.merge, shown as Pull in the header, and rebase your local commits on top.\nRebasing avoids automatic merge commits like 'Merge branch main into ...', keeping a clean linear history.\nThis is an async operation — the UI stays responsive while waiting for the network.",
 	},
 	{
+		lhs = "gsp",
+		group = "Sync",
+		rhs = git_pull_rebase,
+		desc = "Pull rebase",
+		explain = "Pull from the configured branch upstream, including differently named remote branches, and rebase local commits on top.\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
+	},
+	{
 		lhs = "P",
+		group = "Sync",
 		rhs = git_push,
 		desc = "Push",
 		explain = "Push the separate destination shown in the header. Branch pushRemote overrides remote.pushDefault, then the pull remote.\nConfigured remote push refspecs and push.default are honored; without explicit policy, use the upstream branch (or the local name on a fork).\nFirst publication requires full-destination confirmation. Use [gPp] to choose an explicit remote and branch. Missing or ambiguous mappings stop with an explanation.\nExisting pull upstream is preserved. Divergent remote history is rejected without forcing.",
 	},
 	{
-		lhs = "gPp", rhs = git_push_override, desc = "Choose explicit push destination",
+		lhs = "gPp", group = "Sync", rhs = git_push_override, desc = "Choose explicit push destination",
 		explain = "Choose a remote and full destination branch.\nChoosing the remote and branch confirms the destination; no further publish prompt follows.\nExisting pull upstream is preserved; ordinary push never forces.",
 	},
 	{
 		lhs = "gPF",
+		group = "Sync",
 		rhs = git_push_rewrite,
 		desc = "Rewrite with reviewed lease",
 		explain = "Publish an intentional history rewrite (e.g. after amend or rebase) to the push destination shown in the header.\nA review shows the push endpoint, the full destination ref, the remote commit it replaces and the local commit replacing it; cancel is the default and changes nothing.\nAfter published cleanup, this review retains the remote commit reviewed before cleanup. Git pushes with --force-with-lease=<ref>:<reviewed commit>. If a teammate advanced the branch since review, even when you fetched meanwhile, the rewrite is rejected and never retried as raw force or ordinary push.\nmain, merge_workflow.main_branch and setup() protected_branches are never rewritten.",
 	},
 	{
 		lhs = "f",
+		group = "Sync",
 		rhs = git_fetch,
 		desc = "Fetch",
 		explain = "Download objects and refs from the remote (git fetch <remote>).\nThis updates your remote-tracking branches (e.g. origin/main) without changing your working tree or local branches.\nUseful to see what others have pushed before you merge or rebase.",
 	},
 	{
 		lhs = "gpr",
+		group = "Sync",
 		rhs = create_pull_request,
 		desc = "Create pull request",
 		explain = "Create a GitHub pull request using the GitHub CLI (gh pr create).\nYou will be prompted for:\n  - PR title (defaults to the current branch name)\n  - Base branch (defaults to your configured main branch)\n  - Optional body text\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).\nUses the resolved push destination branch as PR head. Known GitHub forks use user:branch and an explicit base repository; unknown fork identities stop with guidance. Organization-owned fork heads are unsupported by gh. First publication reviews the full destination before publishing, preserving an existing pull upstream. Missing or ambiguous mappings stop; use [gPp] to choose a destination.",
 	},
 	{
 		lhs = "ghr",
+		group = "Sync",
 		rhs = create_github_repo,
 		desc = "Create GitHub repo",
 		explain = "Create a new GitHub repository from the current local repo using `gh repo create --source . --push`.\nYou can choose visibility (private/public) and optionally provide an explicit repo name (`owner/name`).\nThe configured remote name is used (default: origin).\n\nRequires: the `gh` CLI must be installed and authenticated (gh auth login).",
@@ -2071,26 +1945,31 @@ keymap_mappings = {
 	-- Conflicts
 	{
 		lhs = "C",
+		group = "Conflicts & recovery",
 		rhs = check_conflicts,
 		desc = "Check conflicts",
 		explain = "Preview merge conflicts without actually merging:\n1. Fetches latest changes from the remote\n2. Runs `git merge-tree` to simulate a merge\n3. Reports whether conflicts exist\n\nThis is completely safe — no files are changed, no merge is started.\nUse this before merging to see if the merge will be clean.",
 	},
 	{
 		lhs = "X",
+		group = "Conflicts & recovery",
 		rhs = resolve_conflicts,
 		desc = "Resolve conflicts",
 		explain = "Open the conflict resolver for unmerged files with merge, diff3 or zdiff3 markers.\n\nLayout:\n  Left pane — Theirs (Git's incoming marker side)\n  Middle pane — Result (live preview of the final file)\n  Right pane — Ours (Git's current marker side)\n\nTitles show the marker labels and the information panel names the operation. During merge, ours is local and theirs is incoming. During rebase, ours is the rebased base (upstream plus commits already replayed); theirs is the commit being replayed. The common ancestor in diff3/zdiff3 is excluded from either choice and remains visible in unresolved previews.\n\nKeybindings inside the resolver:\n  j/k — Navigate between conflicts\n  l   — Accept ours for current conflict\n  h   — Accept theirs for current conflict\n  a   — Accept ours for all conflicts\n  A   — Accept theirs for all conflicts\n  f   — Select another conflicted file\n  s   — Save and stage only after every conflict has a choice\n  q   — Quit without saving\n\nSaving preserves file bytes and checks for edits since loading. Changed files require quitting and reopening with X. Failed writes never stage; after a staging failure, fix the Git error and retry s. Remaining unmerged files are offered after saving. Commit/continue is offered only after the index has no unmerged entries and inspection succeeds.\n\nMalformed markers, binary conflicts and delete/modify conflicts remain unresolved with a diagnostic. Resolve these externally and stage explicitly.",
 	},
 
+	{ lhs = "gx", group = "Conflicts & recovery", rhs = recover_repository, desc = "Recover interrupted operation", explain = "Continue or abort the actual interrupted merge, rebase, cherry-pick or revert. Resolve and stage conflicts with X first. Continue deliberately resumes a remembered integration workflow while prerequisites remain valid; abort preserves completed synchronization. Cancel leaves Git unchanged. Other mutations are rejected until recovery completes." },
 	-- Remotes
 	{
 		lhs = "R",
+		group = "Remotes",
 		rhs = remote_add,
 		desc = "Add remote",
 		explain = "Register a new remote repository (git remote add <name> <url>).\nYou will be prompted for the remote name (e.g. origin) and the URL.\nAfter adding, you can push/pull from this remote.",
 	},
 	{
 		lhs = "U",
+		group = "Remotes",
 		rhs = remote_set_url,
 		desc = "Set remote url",
 		explain = "Update the URL of an existing remote (git remote set-url <name> <url>).\nThe current URL is pre-filled for easy editing.\nUseful when a repository moves or when switching between HTTPS and SSH URLs.",
@@ -2099,60 +1978,70 @@ keymap_mappings = {
 	-- Branches
 	{
 		lhs = "gbn",
+		group = "Branches",
 		rhs = switch_new_branch,
 		desc = "New Branch",
 		explain = "Create a new branch and switch to it (git switch -c <name>).\nThe branch is created from your current HEAD position.\nThis is the recommended way to start working on a new feature or fix.",
 	},
 	{
 		lhs = "gbs",
+		group = "Branches",
 		rhs = switch_branch,
 		desc = "Switch branch",
 		explain = "Switch to an existing local branch (git switch <name>).\nOpens a picker with all local branches. Your working tree must be clean or the switch may fail.\nTip: stash uncommitted changes first with [gzz] if needed.",
 	},
 	{
 		lhs = "gbN",
+		group = "Branches",
 		rhs = rename_branch,
 		desc = "Rename branch",
 		explain = "Rename a local branch (git branch -m <old> <new>).\nOpens a picker with all local branches, then prompts for the new name.\nThe currently checked-out branch can also be renamed.",
 	},
 	{
 		lhs = "gbR",
+		group = "Branches",
 		rhs = switch_remote_branch,
 		desc = "Switch remote branch",
 		explain = "Fetch a remote branch, then create/switch to a local tracking branch.\nRuns fetch first (git fetch <remote> <branch>) so your remote-tracking ref is up to date.\nIf the local branch already exists, it simply switches to it.\nOtherwise runs: git switch -c <branch> --track <remote/branch>\n\nUseful for checking out a colleague's branch for the first time.",
 	},
 	{
 		lhs = "gbd",
+		group = "Branches",
 		rhs = delete_branch_safe,
 		desc = "Delete local branches safely",
 		explain = "Safely delete local branches (git branch -d).\nChoose branches one by one, then Esc to finish; choosing every candidate also finishes. No confirmation follows, since Git refuses unmerged branches.\nLocal names containing slashes stay local, even when they resemble remote branches.\nGit refuses unmerged branches and branches checked out in any worktree. Each deletion result is reported; failures do not force deletion or prevent other selected attempts.",
 	},
 	{
 		lhs = "gbD",
+		group = "Branches",
 		rhs = delete_branch_force,
 		desc = "Force delete local branches",
 		explain = "Force-delete local branches (git branch -D).\nChoose branches one by one, then Esc to finish. A separate force confirmation lists all selected branches and defaults to No.\nBranches checked out in any worktree remain protected.\nRemote branches are unaffected. Each deletion result is reported.\n\nWarning: commits unique to deleted branches will become unreachable and may be garbage-collected.",
 	},
 	{
 		lhs = "gbx",
+		group = "Branches",
 		rhs = delete_remote_branch,
 		desc = "Delete remote branches",
 		explain = "Delete remote branches (git push <remote> --delete refs/heads/<branch>).\nChoose destinations one by one, then Esc to finish. One confirmation lists each configured remote and full branch name and defaults to No.\nEach result is reported; a rejected deletion does not prevent attempts on other selected destinations.\nTracking refs matching overlapping remote names are omitted rather than guessed.\nEvery configured remote must have exactly one standard fetch mapping: refs/heads/* to refs/remotes/<remote>/*.\nCustom, additional or missing mappings leave the entire deletion picker empty because they may populate another remote's namespace.\nCancelling before selection or declining confirmation changes no refs; local branches and same-named remote tags are unaffected.",
 	},
 	{
 		lhs = "gbm",
+		group = "Branches",
 		rhs = merge_branch,
 		desc = "Merge branch",
 		explain = "Merge another branch into your current branch (git merge <name>).\nOpens a picker with all local branches except the current one.\nIf there are conflicts, use [X] to open the conflict resolver.",
 	},
 	{
 		lhs = "gbw",
+		group = "Branches",
 		rhs = merge_workflow,
 		desc = "Merge workflow",
 		explain = "Choose history-preserving Merge (default) or an explicit reviewed Rebase.\nMain needs a valid upstream and the worktree/index must be clean. Main updates by fast-forward only; divergence stops. A published feature first merges its upstream; an unpublished feature (no upstream) skips that step with a warning, then integration merges main into feature and feature into main, preserving published commit IDs.\nRebase uses cleanup review: choosing Rebase confirms private replay; published replay needs Rewrite and retains its pre-cleanup lease for gPF. Unknown/protected history is refused.\nThe first failure stops with current state, completed/failed/remaining steps and X/gx recovery. Continue with gx or the resolver confirmation resumes remaining steps after revalidation; further conflicts pause again. Abort preserves completed synchronization. Plans exist only for this editor process. Publication is manual.",
 	},
 	{
 		lhs = "gbr",
+		group = "Branches",
 		rhs = rebase_branch,
 		desc = "Rebase branch",
 		explain = "Choose a local branch and explicitly confirm replaying private commits or Rewrite when the replayed history includes published commits. Unknown evidence and protected published branches are refused; cancellation changes no refs or index.\nRebase changes only the reviewed current branch, regardless of rebase.updateRefs. Existing staged changes can prevent Git from rebasing and remain intact. Resolve conflicts with X, then continue, abort or skip with gx. Publish private replay with P; published replay retains the pre-rebase reviewed lease for gPF through conflict recovery and fetches.",
@@ -2161,6 +2050,7 @@ keymap_mappings = {
 	-- Stage a file or check out a local branch
 	{
 		lhs = "<Space>",
+		group = "Staging",
 		rhs = activate_current_selection,
 		desc = "Toggle stage / checkout branch",
 		explain = "In Local Branches, check out the branch under the cursor (git switch <name>).\nMoving the cursor only previews branch history; press Space to switch. Git refuses a switch that would overwrite local changes.\nIn Worktree, toggle the staging state of the file under the cursor: staged files are unstaged, and unstaged or untracked files are staged.",
@@ -2169,18 +2059,21 @@ keymap_mappings = {
 	-- Stash
 	{
 		lhs = "gzz",
+		group = "Stash",
 		rhs = stash_push,
 		desc = "Stash push",
 		explain = "Save your uncommitted changes to the stash (git stash push).\nYou can optionally provide a description message.\nStashing lets you temporarily shelve changes so you can switch branches or pull without conflicts.\nRetrieve them later with [gzp].",
 	},
 	{
 		lhs = "gzp",
+		group = "Stash",
 		rhs = stash_pop,
 		desc = "Stash pop",
 		explain = "Re-apply stashed changes and remove them from the stash (git stash pop).\nIf there is only one stash entry it is popped immediately.\nIf there are multiple entries, a picker lets you choose which one to pop.\nThe popped changes are applied to your working tree.",
 	},
 	{
 		lhs = "gzd",
+		group = "Stash",
 		rhs = stash_drop,
 		desc = "Stash drop",
 		explain = "Permanently delete a stash entry (git stash drop).\nA picker lets you choose which entry to drop, followed by a confirmation prompt.\n\nWarning: dropped stash entries cannot be recovered.",
@@ -2189,21 +2082,24 @@ keymap_mappings = {
 	-- Navigation
 	{
 		lhs = "[",
+		group = "General",
 		rhs = ui.bottom_view_prev,
 		desc = "Previous bottom pane view",
 		explain = "Cycle the bottom-left pane to the previous view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [1/3]).",
 	},
 	{
 		lhs = "]",
+		group = "General",
 		rhs = ui.bottom_view_next,
 		desc = "Next bottom pane view",
 		explain = "Cycle the bottom-left pane to the next view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [2/3]).",
 	},
 	{
 		lhs = "?",
+		group = "General",
 		rhs = show_keymap_popup,
 		desc = "Show keymap help",
-		explain = "Open this help popup showing all available keymaps with explanations.\nNavigate with j/k to highlight a keymap and see its explanation on the right.\nPress q or Esc to close.",
+		explain = "Open this help popup showing all available keymaps, grouped by task, with explanations.\nNavigate with j/k to highlight a keymap and see its explanation on the right.\nPress / to search by key, name or explanation; Enter or Esc returns to the list, and Up/Down move the selection while typing.\nPress Esc to clear the search, and q (or Esc with an empty search) to close.",
 	},
 }
 
