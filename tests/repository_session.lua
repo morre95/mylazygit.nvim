@@ -1273,11 +1273,55 @@ test('revisiting explicit push help retains one explanation heading', function()
     end
     assert(explanation, 'Help explanation is visible')
     local headings = 0
-    for _, line in ipairs(explanation) do if line:match('^Explanation:') then headings = headings + 1 end end
+    for _, line in ipairs(explanation) do if line == '[gPp] Choose explicit push destination' then headings = headings + 1 end end
     equal(headings, 1, 'Help does not accumulate titles on visit ' .. visit)
     if first then equal(explanation, first, 'Repeated help selection has stable content') else first = explanation end
     action('q')
   end
+  ui.close()
+end)
+test('help search filters grouped keymaps and clearing it restores the full list', function()
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open(); action('?')
+  local help_buf, help_win = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
+  local function buffer_of(filetype)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.bo[buf].filetype == filetype then return buf end
+    end
+  end
+  local function keymap_lines()
+    local found = {}
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(help_buf, 0, -1, false)) do
+      if line:match('^  %[') then table.insert(found, (vim.trim(line):gsub('%s+', ' '))) end
+    end
+    return found
+  end
+  local function search(text)
+    local search_buf = buffer_of('mylazygit-help-search')
+    vim.api.nvim_buf_set_lines(search_buf, 0, -1, false, { text })
+    vim.api.nvim_exec_autocmds('TextChanged', { buffer = search_buf })
+  end
+  local all = keymap_lines()
+  equal(vim.api.nvim_buf_get_lines(help_buf, 0, 1, false)[1], 'General', 'Keymaps are listed under group headings')
+  equal(vim.api.nvim_win_get_cursor(help_win)[1], 2, 'Selection starts on the first keymap, not its heading')
+
+  search('remote branch switch')
+  equal(keymap_lines(), { '[gbR] Switch remote branch' }, 'All words must match across key, name and explanation')
+  equal(vim.api.nvim_buf_get_lines(buffer_of('mylazygit-explain'), 0, 1, false)[1], '[gbR] Switch remote branch', 'The surviving match is selected and explained')
+  search('gpf')
+  assert(vim.tbl_contains(keymap_lines(), '[gPF] Rewrite with reviewed lease'), 'Lowercase search ignores case')
+  equal(vim.api.nvim_buf_get_lines(buffer_of('mylazygit-explain'), 0, 1, false)[1], '[gPF] Rewrite with reviewed lease', 'A key match is selected ahead of explanations that mention it')
+  search('GPF')
+  equal(keymap_lines(), {}, 'Uppercase search is case-sensitive')
+  search('no-such-keymap')
+  equal(vim.api.nvim_buf_get_lines(help_buf, 0, -1, false), { 'No keymaps match "no-such-keymap"' }, 'An empty result says so')
+
+  action('<Esc>')
+  equal(keymap_lines(), all, 'Esc clears an active search before closing')
+  action('<Esc>')
+  equal(buffer_of('mylazygit-help'), nil, 'Esc with an empty search closes help')
+  equal(buffer_of('mylazygit-help-search'), nil, 'The search field closes with help')
   ui.close()
 end)
 test('dedicated remote deletion confirms the exact destination and cancellation changes no refs', function()
