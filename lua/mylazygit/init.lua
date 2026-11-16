@@ -1913,14 +1913,14 @@ keymap_mappings = {
 		group = "Sync",
 		rhs = git_pull,
 		desc = "Pull",
-		explain = "Pull the full source branch configured by branch.<name>.remote and branch.<name>.merge, shown as Pull in the header, and rebase your local commits on top.\nRebasing avoids automatic merge commits like 'Merge branch main into ...', keeping a clean linear history.\nThis is an async operation — the UI stays responsive while waiting for the network.",
+		explain = "Pull the full source branch configured by branch.<name>.remote and branch.<name>.merge, shown as Pull in the header, and rebase your local commits on top (git pull --rebase=merges).\nRebasing avoids automatic merge commits like 'Merge branch main into ...'. Merge commits you made locally and have not pushed yet are kept as merges.\nThis is an async operation — the UI stays responsive while waiting for the network.",
 	},
 	{
 		lhs = "gsp",
 		group = "Sync",
 		rhs = git_pull_rebase,
 		desc = "Pull rebase",
-		explain = "Pull from the configured branch upstream, including differently named remote branches, and rebase local commits on top.\nThis avoids creating merge commits like 'Merge branch main into ...' and keeps a linear history.\nSame as [p] but placed under the `gs` prefix for discoverability.",
+		explain = "Pull from the configured branch upstream, including differently named remote branches, and rebase local commits on top.\nThis avoids creating merge commits like 'Merge branch main into ...'; unpushed local merge commits are kept as merges.\nSame as [p] but placed under the `gs` prefix for discoverability.",
 	},
 	{
 		lhs = "P",

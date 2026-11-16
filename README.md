@@ -8,7 +8,7 @@ A minimal Neovim UI inspired by [lazygit](https://github.com/jesseduffield/lazyg
 - Always-on log/diff panel showing `git log --oneline` and a trimmed `git diff`, with color cues for pushed (green) vs local-only (red) commits
 - Stage/unstage files via picker prompts, with multi-select support when staging
 - Create commits with `vim.ui.input`
-- Run `git init`, `git pull --rebase`, `git push`, and `git fetch`, with separate resolved pull and push targets
+- Run `git init`, `git pull --rebase=merges`, `git push`, and `git fetch`, with separate resolved pull and push targets
 - Create GitHub pull requests from inside Neovim via `gh pr create`
 - Create a GitHub repository from the current local repo via `gh repo create --source . --push` with private/public visibility
 - Merge workflow that preserves shared feature history, with a separate reviewed rebase choice
@@ -234,7 +234,7 @@ Resolved synchronization uses `repo.resolve_pull_target()` and `repo.resolve_pus
 
 `repo.resolve_pr_target(push_target, base_remote)` returns an explicit GitHub `{ repo, head }` identity for PR creation, or `nil, reason` when a fork cannot be identified safely. Same-repository local transport adapters retain their unqualified head behavior.
 
-Execute through `repo.pull_target(target, true)` (rebase) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates source commit, branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
+Execute through `repo.pull_target(target, true)` (rebase, preserving unpublished local merge commits) or `repo.push_target(target)`, with async counterparts `pull_target_async(target, true, callback)` and `push_target_async(target, callback)`. Execution revalidates source commit, branch, destination, push endpoint, and confirmation before running. Legacy explicit positional calls remain available, including branch and tag refspecs, but ordinary push refuses forced refspecs, mirror configuration and multiple endpoints.
 
 Intentional rewrites use `repo.resolve_rewrite_target(opts)`, which resolves the push destination, refuses `main`, any additional protected branches in `opts.protected`, and missing remote history, and records the reviewed remote commit as `target.expected`. After review, set `target.confirmed = true` and execute `repo.push_rewrite_target(target)` or `repo.push_rewrite_target_async(target, callback)`. Execution revalidates source commit, branch, destination and protection, then leases exactly `target.ref:target.expected`; a stale lease fails without changing remote history.
 

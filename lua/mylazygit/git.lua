@@ -709,7 +709,8 @@ local function target_args(target, operation, rebase, inspect)
 	end
 	local args = { operation }
 	if operation == "push" then table.insert(args, "--no-follow-tags") end
-	if operation == "pull" and rebase then table.insert(args, "--rebase") end
+	-- Plain --rebase would flatten an unpublished local merge commit into its individual commits.
+	if operation == "pull" and rebase then table.insert(args, "--rebase=merges") end
 	if operation == "push" and resolved.set_upstream then table.insert(args, "--set-upstream") end
 	-- Explicit non-force refspec prevents Git's default policy from publishing extra refs.
 	vim.list_extend(args, { "--", target.remote, operation == "push" and
