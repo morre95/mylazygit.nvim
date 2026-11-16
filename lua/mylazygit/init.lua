@@ -55,7 +55,39 @@ local state = {
 	},
 }
 
-git.on_mutation(function() if active_controller == M then M.refresh() end end)
+-- Actions pressed while a Git operation runs wait here and run in order once it finishes.
+local queued = {}
+local rendered_generation
+
+local function drain_queue()
+	while #queued > 0 and not git.running_mutation() do
+		if active_controller ~= M or not ui.is_open() then queued = {}; return end
+		local mapping = table.remove(queued, 1)
+		local ran, err = pcall(mapping.rhs)
+		if not ran then vim.notify(tostring(err), vim.log.levels.ERROR, { title = "MyLazyGit" }) end
+		-- A prompt now owns the keyboard; later actions were typed before it existed.
+		if #queued > 0 and not ui.is_focused() then
+			local dropped = vim.tbl_map(function(entry) return entry.lhs end, queued)
+			queued = {}
+			vim.notify("Dropped queued actions: " .. table.concat(dropped, ", "), vim.log.levels.WARN, { title = "MyLazyGit" })
+		end
+	end
+end
+
+local function run_or_queue(mapping)
+	local running = git.running_mutation()
+	if not running and #queued == 0 then return mapping.rhs() end
+	if queued[#queued] == mapping then return end
+	queued[#queued + 1] = mapping
+	vim.notify(string.format("Queued [%s] %s; runs after %s", mapping.lhs, mapping.desc, running or "the queued actions"), vim.log.levels.INFO, { title = "MyLazyGit" })
+	if not running then vim.schedule(drain_queue) end
+end
+
+git.on_mutation(function()
+	-- An explicit refresh may already have rendered this reservation change.
+	if active_controller == M and rendered_generation ~= git.mutation_generation() then M.refresh() end
+	drain_queue()
+end)
 
 local bottom_view_names = {
 	local_branches = true,
@@ -83,18 +115,6 @@ end
 
 local function notify(msg, level)
 	vim.notify(msg, level or vim.log.levels.INFO, { title = "MyLazyGit" })
-end
-
-local busy_notice
-local function sync_ready()
-	local running = git.running_mutation()
-	if not running then busy_notice = nil; return true end
-	if busy_notice ~= running then
-		local label = running:find("pull", 1, true) and "Pull" or (running:find("push", 1, true) and "Push" or "Another Git operation")
-		notify(label .. " is still running. Wait for it to finish, then retry.")
-		busy_notice = running
-	end
-	return false
 end
 
 local function repo_required()
@@ -287,6 +307,7 @@ function M.refresh()
 	end
 
 	state.active_bottom_view = normalize_bottom_view(ui.get_bottom_view() or state.active_bottom_view)
+	rendered_generation = git.mutation_generation()
 
 	state.status = {}
 
@@ -449,7 +470,7 @@ function M.refresh()
 	local push_target, push_error = git.resolve_push_target()
 	table.insert(layout.info.details, "Pull: " .. (pull_target and (pull_target.remote .. " " .. pull_target.ref) or pull_error))
 	table.insert(layout.info.details, "Push: " .. (push_target and (push_target.remote .. " " .. push_target.ref) or push_error))
-	local publication = git.publication_snapshot(nil, config.max_commit_lines)
+	local publication = git.publication_snapshot(push_target, config.max_commit_lines)
 	local freshness = publication.freshness
 	local fetch_description = "unobserved"
 	if freshness.fetched_at then fetch_description = "cached " .. os.date("%Y-%m-%d %H:%M:%S", freshness.fetched_at) end
@@ -808,7 +829,6 @@ local function push_to_target(target, callback)
 end
 
 local function push_with_review(opts)
-	if not sync_ready() then return end
 	run_async_and_refresh(function(callback)
 		git.mutate_async("push_target_async", function(done)
 			notify("Checking push destination...")
@@ -904,7 +924,6 @@ local function git_init()
 end
 
 local function git_pull()
-	if not sync_ready() then return end
 	if not repo_required() then return end
 	local target, err = git.resolve_pull_target()
 	if not target then notify(err, vim.log.levels.WARN); return end
@@ -915,13 +934,11 @@ end
 local git_pull_rebase = git_pull
 
 local function git_push()
-	if not sync_ready() then return end
 	if not repo_required() then return end
 	push_with_review({})
 end
 
 local function git_push_override()
-	if not sync_ready() then return end
 	if not repo_required() then return end
 	local branch = git.current_branch()
 	if not branch then notify("Cannot push from detached HEAD; switch to a local branch.", vim.log.levels.WARN); return end
@@ -1759,6 +1776,7 @@ keymap_mappings = {
 	{
 		lhs = "q",
 		group = "General",
+		immediate = true,
 		rhs = ui.close,
 		desc = "Quit MyLazyGit",
 		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
@@ -1766,6 +1784,7 @@ keymap_mappings = {
 	{
 		lhs = "<Esc>",
 		group = "General",
+		immediate = true,
 		rhs = ui.close,
 		desc = "Quit MyLazyGit",
 		explain = "Close the MyLazyGit floating UI and return to your editor.\nAll unsaved selections are discarded. Your git state is unchanged.",
@@ -1773,6 +1792,7 @@ keymap_mappings = {
 	{
 		lhs = "r",
 		group = "General",
+		immediate = true,
 		rhs = M.refresh,
 		desc = "Refresh status",
 		explain = "Re-read the git status and update every pane: worktree, commits, branches, diff preview, and info bar.\nUseful after making changes outside MyLazyGit or when the UI feels stale.",
@@ -2083,6 +2103,7 @@ keymap_mappings = {
 	{
 		lhs = "[",
 		group = "General",
+		immediate = true,
 		rhs = ui.bottom_view_prev,
 		desc = "Previous bottom pane view",
 		explain = "Cycle the bottom-left pane to the previous view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [1/3]).",
@@ -2090,6 +2111,7 @@ keymap_mappings = {
 	{
 		lhs = "]",
 		group = "General",
+		immediate = true,
 		rhs = ui.bottom_view_next,
 		desc = "Next bottom pane view",
 		explain = "Cycle the bottom-left pane to the next view.\nThe pane rotates between: Local Branches, Remote Branches, and Diff Preview.\nThe current view number is shown in the pane title (e.g. [2/3]).",
@@ -2097,6 +2119,7 @@ keymap_mappings = {
 	{
 		lhs = "?",
 		group = "General",
+		immediate = true,
 		rhs = show_keymap_popup,
 		desc = "Show keymap help",
 		explain = "Open this help popup showing all available keymaps, grouped by task, with explanations.\nNavigate with j/k to highlight a keymap and see its explanation on the right.\nPress / to search by key, name or explanation; Enter or Esc returns to the list, and Up/Down move the selection while typing.\nPress Esc to clear the search, and q (or Esc with an empty search) to close.",
@@ -2104,11 +2127,15 @@ keymap_mappings = {
 }
 
 local function set_keymaps()
-	ui.set_keymaps(keymap_mappings)
+	ui.set_keymaps(vim.tbl_map(function(mapping)
+		if mapping.immediate then return mapping end
+		return vim.tbl_extend("force", mapping, { rhs = function() return run_or_queue(mapping) end })
+	end, keymap_mappings))
 end
 
 function M.open()
 	active_controller = M
+	if not ui.is_open() then queued = {} end
 	ui.set_handlers({
 		on_worktree_select = show_preview_for_file,
 		on_commit_select = show_preview_for_commit,

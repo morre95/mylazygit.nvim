@@ -805,13 +805,15 @@ test('UI publication colors and descriptions use the snapshot and keep freshness
   end
   ui.close()
 end)
-test('rapid pull and push reports busy once without inspecting the remote', function()
+test('rapid pull and push queues one push without inspecting the remote early', function()
+  local alice = git.session(a)
   local plugin, ui = require('mylazygit'), require('mylazygit.ui')
   vim.api.nvim_set_current_dir(a); plugin.open()
   local original_system, original_systemlist = vim.system, vim.fn.systemlist
-  local complete, probes = nil, 0
+  local complete, probes, pushes = nil, 0, 0
   vim.system = function(cmd, opts, callback)
     if cmd[4] == 'pull' then complete = callback; return {} end
+    if cmd[4] == 'push' then pushes = pushes + 1 end
     return original_system(cmd, opts, callback)
   end
   vim.fn.systemlist = function(cmd)
@@ -822,14 +824,76 @@ test('rapid pull and push reports busy once without inspecting the remote', func
   local start = #notifications
   action('P'); action('P')
   local messages = vim.list_slice(notifications, start + 1)
-  complete({ code = 0, stdout = '', stderr = '' })
-  vim.system, vim.fn.systemlist = original_system, original_systemlist
-  assert(vim.wait(5000, function() return git.session(a).repository_state().running == nil end))
-  ui.close()
-  equal(probes, 0, 'Busy push must not contact the remote before checking the running operation')
+  equal(probes, 0, 'Busy push must not contact the remote before the running operation finishes')
+  equal(pushes, 0, 'Queued push waits for the pull')
   equal(#messages, 1, 'Repeated busy presses give one clear notification')
+  assert(messages[1]:find('Queued [P]', 1, true), 'Notification names the queued action')
+  complete({ code = 0, stdout = '', stderr = '' })
+  assert(vim.wait(5000, function() return pushes > 0 and alice.running_mutation() == nil end), 'Queued push runs after the pull')
+  vim.system, vim.fn.systemlist = original_system, original_systemlist
+  ui.close()
+  equal(pushes, 1, 'Repeated presses queue a single push')
+  equal(probes, 0, 'Queued push still inspects the remote asynchronously')
 end)
-test('UI reports a held publication and rejects a second mutation until completion', function()
+test('actions pressed during a running operation run in order afterwards while navigation stays immediate', function()
+  local alice = git.session(a)
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_system, complete = vim.system, nil
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'fetch' then complete = callback; return {} end
+    return original_system(cmd, opts, callback)
+  end
+  action('f'); assert(complete, 'Fetch reached the async process boundary')
+  vim.fn.writefile({ 'queued' }, a .. '/queued.txt')
+  local view = ui.get_bottom_view()
+  action('gsa'); action('gsU'); action(']')
+  assert(ui.get_bottom_view() ~= view, 'Navigation is not queued')
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'Queued actions wait for the running operation')
+  complete({ code = 0, stdout = '', stderr = '' })
+  vim.system = original_system
+  assert(vim.wait(5000, function() return alice.running_mutation() == nil and ui_text():find('Repository: ready', 1, true) end))
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'Stage all then unstage all ran in the order pressed')
+  equal(alice.status(), { '?? queued.txt' }, 'Both queued actions ran against the worktree')
+  ui.close()
+end)
+test('queued actions are discarded when the UI closes before the running operation finishes', function()
+  local alice = git.session(a)
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_system, complete = vim.system, nil
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'fetch' then complete = callback; return {} end
+    return original_system(cmd, opts, callback)
+  end
+  action('f'); assert(complete)
+  vim.fn.writefile({ 'queued' }, a .. '/queued.txt')
+  action('gsa'); ui.close()
+  complete({ code = 0, stdout = '', stderr = '' })
+  vim.system = original_system
+  assert(vim.wait(5000, function() return alice.running_mutation() == nil end))
+  plugin.open(); vim.wait(50)
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'A closed UI never runs stale actions')
+  ui.close()
+end)
+test('ordinary push contacts the server once before publishing', function()
+  local alice = git.session(a)
+  vim.fn.writefile({ 'publish' }, a .. '/publish.txt'); assert(alice.stage('publish.txt')); assert(alice.commit('Publish'))
+  local plugin, ui = require('mylazygit'), require('mylazygit.ui')
+  vim.api.nvim_set_current_dir(a); plugin.open()
+  local original_system, probes = vim.system, 0
+  vim.system = function(cmd, opts, callback)
+    if cmd[4] == 'ls-remote' then probes = probes + 1 end
+    return original_system(cmd, opts, callback)
+  end
+  action('P')
+  assert(vim.wait(5000, function() return alice.running_mutation() == nil end))
+  vim.system = original_system
+  ui.close()
+  equal(probes, 1, 'Publication reuses the destination check made under the same reservation')
+  equal(command(remote, { 'rev-parse', 'main' }), command(a, { 'rev-parse', 'HEAD' }), 'Commit was published')
+end)
+test('UI reports a held publication and defers a second mutation until completion', function()
   local alice = git.session(a)
   vim.fn.writefile({ 'publish' }, a .. '/publish.txt'); assert(alice.stage('publish.txt')); assert(alice.commit('Publish'))
   vim.fn.writefile({ '#!/bin/sh', 'touch "' .. root .. '/entered"', 'while test ! -e "' .. root .. '/release"; do sleep 0.01; done' }, remote .. '/hooks/pre-receive')
@@ -838,9 +902,10 @@ test('UI reports a held publication and rejects a second mutation until completi
   vim.api.nvim_set_current_dir(a); plugin.open(); action('P')
   assert(vim.wait(5000, function() return vim.fn.filereadable(root .. '/entered') == 1 and ui_text():find('Running: push_target_async', 1, true) end), 'Visible header reports publication still running')
   vim.fn.writefile({ 'pending' }, a .. '/pending.txt'); action('gsa')
-  equal(alice.diff({ '--cached', '--name-only' }), {}, 'UI stage is rejected during publication')
+  equal(alice.diff({ '--cached', '--name-only' }), {}, 'UI stage waits during publication')
   vim.fn.writefile({}, root .. '/release')
   assert(vim.wait(5000, function() return alice.repository_state().running == nil and ui_text():find('Repository: ready', 1, true) end), 'Completion refresh shows ready')
+  equal(alice.diff({ '--cached', '--name-only' }), { 'pending.txt' }, 'Queued stage runs once publication completes')
   ui.close()
 end)
 test('push destination checks run asynchronously while reserving the repository', function()

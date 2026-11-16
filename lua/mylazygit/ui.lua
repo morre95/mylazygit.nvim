@@ -796,6 +796,15 @@ function M.is_open()
 	return state.root and state.root.win and vim.api.nvim_win_is_valid(state.root.win)
 end
 
+--- Whether the cursor is in one of the UI panes rather than a prompt or another window.
+function M.is_focused()
+	local current = vim.api.nvim_get_current_win()
+	for _, section in pairs(state.sections) do
+		if section.win == current then return true end
+	end
+	return false
+end
+
 local function focus_by_index(index)
 	local name = state.focus_order[index]
 	if not name then

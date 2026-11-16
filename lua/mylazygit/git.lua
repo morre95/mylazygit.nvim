@@ -1,5 +1,6 @@
 local reservations = {}
 local observers = {}
+local generations = {}
 local fetch_records = {}
 local cleanup_reviews = {}
 -- Interrupted integration plans exist only in this editor process.
@@ -131,12 +132,16 @@ end
 
 -- Reuse the same target validation for sync and async callers. Only remote
 -- inspections yield; local Git queries and policy checks keep their semantics.
-local function inspect_async(fn, callback)
+-- `replies` holds remote answers by command; seeded answers are not asked again.
+local function inspect_async(fn, callback, replies)
 	local owner = token
-	local inspections, pending = {}, nil
+	local inspections, pending, probed = replies or {}, nil, false
 	local thread = coroutine.create(function()
 		return fn(function(args, opts)
-			pending = table.concat(args, "\0")
+			local command = table.concat(args, "\0")
+			local known = inspections[command]
+			if known then return unpack(known, 1, known.n) end
+			pending, probed = command, true
 			return coroutine.yield(args, opts)
 		end)
 	end)
@@ -151,7 +156,7 @@ local function inspect_async(fn, callback)
 				-- Input and external Git commands may change local policy while a
 				-- probe is pending. Replay validation against current local state,
 				-- reusing server replies so this final check cannot wait on network.
-				if result[1] and result[2] and next(inspections) then
+				if result[1] and result[2] and probed then
 					local checked = pack(pcall(fn, function(args)
 						local reply = inspections[table.concat(args, "\0")]
 						if not reply then error("Sync destination changed during inspection; retry the operation.", 0) end
@@ -522,8 +527,15 @@ function M.resolve_push_target(opts)
 	return resolve_push_target(opts, system)
 end
 
+-- Remote answers gathered for a target, reusable only inside the reservation that gathered them.
+local target_probes = setmetatable({}, { __mode = "k" })
+
 function M.resolve_push_target_async(opts, callback)
-	inspect_async(function(inspect) return resolve_push_target(opts, inspect) end, callback)
+	local owner, replies = token, {}
+	inspect_async(function(inspect) return resolve_push_target(opts, inspect) end, function(target, ...)
+		if target and owner then target_probes[target] = { owner = owner, replies = replies } end
+		return callback(target, ...)
+	end, replies)
 end
 
 -- Publication evidence is always relative to cached tracking history.
@@ -724,11 +736,15 @@ function M.pull_target_async(target, rebase, callback)
 end
 
 function M.push_target_async(target, callback)
+	-- A target inspected under the reservation still held needs no second server round trip:
+	-- local policy is revalidated below, and nothing else could publish from this worktree meanwhile.
+	local probe = target_probes[target]
+	local replies = probe and probe.owner == token and reservations[key] == token and probe.replies or nil
 	inspect_async(function(inspect) return target_args(target, "push", nil, inspect) end, function(args, err)
 		if not args then callback(false, { err }); return end
 		local launched, launch_error = pcall(system_async, args, { loading_msg = "Pushing " .. target.remote .. " " .. target.ref .. "..." }, callback)
 		if not launched then callback(false, { tostring(launch_error) }) end
-	end)
+	end, replies)
 end
 
 -- Callers may add protected branches but can never unprotect main.
@@ -1806,7 +1822,12 @@ end
 function M.running_mutation()
 	return reservations[key] and reservations[key].action or nil
 end
+--- Counts reservation changes, so a view can tell whether it already shows the latest one.
+function M.mutation_generation()
+	return generations[key] or 0
+end
 local function changed_lifecycle()
+	generations[key] = (generations[key] or 0) + 1
 	for _, callback in ipairs(observers[key] or {}) do
 		vim.schedule(function() pcall(callback) end)
 	end
@@ -1844,9 +1865,12 @@ function M.repository_state()
 	local _, refs = system({ "for-each-ref", "--format=%(refname) %(objectname)", "refs" }, { silent = true })
 	local conflicts_ok, conflicts = system({ "diff", "--name-only", "--diff-filter=U" }, { silent = true })
 	local operation, operation_id
-	for _, entry in ipairs({ { "rebase-merge", "rebase" }, { "rebase-apply", "rebase" }, { "MERGE_HEAD", "merge" }, { "CHERRY_PICK_HEAD", "cherry-pick" }, { "REVERT_HEAD", "revert" }, { "sequencer", "sequencer" } }) do
-		local ok, paths = system({ "rev-parse", "--git-path", entry[1] }, { silent = true })
-		local path = ok and paths[1]
+	local markers = { { "rebase-merge", "rebase" }, { "rebase-apply", "rebase" }, { "MERGE_HEAD", "merge" }, { "CHERRY_PICK_HEAD", "cherry-pick" }, { "REVERT_HEAD", "revert" }, { "sequencer", "sequencer" } }
+	local lookup = { "rev-parse" }
+	for _, entry in ipairs(markers) do vim.list_extend(lookup, { "--git-path", entry[1] }) end
+	local paths_ok, paths = system(lookup, { silent = true })
+	for index, entry in ipairs(markers) do
+		local path = paths_ok and paths[index]
 		if path and path:sub(1, 1) ~= "/" then path = cwd .. "/" .. path end
 		if path and (vim.uv or vim.loop).fs_stat(path) then operation, operation_id = entry[2], operation_identity(path); break end
 	end
